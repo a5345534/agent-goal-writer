@@ -9,9 +9,10 @@ license: MIT
 This skill writes **OpenSpec change packages** from a user goal/request.
 
 It is self-contained. Do **not** load workspace-local OpenSpec authoring skills
-for the normal workflow; all required authoring rules, templates, and quality
-gates are below. A target workspace may load this skill, but should not copy or
-own a separate OpenSpec writing/planning skill.
+for the normal workflow; all required authoring rules, templates, quality gates,
+and fallback automation are in this skill folder. A target workspace may load
+this skill, but should not copy or own a separate OpenSpec writing/planning
+skill.
 
 ## Purpose
 
@@ -44,9 +45,10 @@ This skill is the prompt-level owner for the complete OpenSpec authoring line:
 - review / validation of an existing change package;
 - archive-readiness preflight checks.
 
-Project-local scripts and shared `openspec-workflow` tools remain executable
-policy when present. This skill tells the agent how to use them and how to fill
-in the source-grounded authoring work.
+Bundled helper scripts under this skill's `scripts/` directory provide the
+automation for scaffolding, source manifests, explainer validation, and archive
+preflight. External workflow packages or project-local `openspec/scripts/*` are
+not part of the required writer-skill path.
 
 ## BMAD-inspired enhancements included
 
@@ -88,6 +90,32 @@ That is a separate execution-planning concern.
   or cross-module capability.
 - Optional mode: create, update, validate/review, explainer-only, or
   archive-preflight-only.
+
+## Bundled automation contract
+
+Resolve `<skill-dir>` to the directory containing this `SKILL.md`. The skill
+ships these helper entrypoints and they use only Python's standard library:
+
+```bash
+<skill-dir>/scripts/openspec-propose <change-name> --project-root <project-root> --capability <capability>
+<skill-dir>/scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
+<skill-dir>/scripts/openspec-validate-source-manifest <change-name> --project-root <project-root>
+<skill-dir>/scripts/openspec-validate-explainer <change-name> --project-root <project-root> --require-decision-review
+<skill-dir>/scripts/openspec-archive-preflight <change-name> --project-root <project-root> --require-decision-review
+```
+
+Compatibility wrapper for projects or agents expecting the historical script
+name:
+
+```bash
+<skill-dir>/scripts/check-change-explainer.sh <change-name> --project-root <project-root> --require-decision-review
+```
+
+Never report that automatic validation is unavailable merely because the target
+workspace lacks `openspec/scripts/check-change-explainer.sh` or any external
+workflow checkout. Use the bundled helper as the required validator. If a project
+explicitly requires stricter local policy checks, run them only as additional
+evidence after the bundled helper.
 
 ## Capability modes
 
@@ -251,31 +279,20 @@ Capability/spec name rules:
 
 ### 6. Scaffold the OpenSpec change
 
-Preferred harness tool when available:
-
-```text
-openspec_workflow action=propose changeName=<change-name> projectRoot=<project-root>
-```
-
-Shell fallback when the shared `openspec-workflow` package scripts are installed:
+Use the bundled skill helper first:
 
 ```bash
-scripts/openspec-propose <change-name> --project-root <project-root>
+<skill-dir>/scripts/openspec-propose <change-name> --project-root <project-root> --capability <capability>
 ```
 
-If the target project has its own OpenSpec scripts, use those documented project
-entrypoints.
+This creates the standard package, including `.openspec.yaml`,
+`proposal.md`, `design.md`, `tasks.md`, `source-manifest.json`, and a starter
+`specs/<capability>/spec.md`. Rewrite the generated markdown/spec content with
+the source-grounded templates below; the scaffold is only a starting point.
 
-If no scaffold tool exists, create these manually:
-
-```text
-openspec/changes/<change-name>/proposal.md
-openspec/changes/<change-name>/design.md
-openspec/changes/<change-name>/tasks.md
-openspec/changes/<change-name>/specs/<capability>/spec.md
-```
-
-Also create `.openspec.yaml` only if the target project uses it.
+Do not depend on any external scaffold tool being present. If a project
+explicitly requires stricter local policy checks, run them only as additional
+evidence after this bundled scaffold/write path.
 
 ### 7. Write `proposal.md`
 
@@ -570,30 +587,17 @@ choice may be questioned later.
 
 ### 13. Refresh `source-manifest.json`
 
-After writing markdown/spec files, refresh the manifest.
-
-Preferred harness tool:
-
-```text
-openspec_workflow action=build-source-manifest changeName=<change-name> projectRoot=<project-root>
-openspec_workflow action=validate-source-manifest changeName=<change-name> projectRoot=<project-root>
-```
-
-Shell fallback:
+After writing markdown/spec files, refresh and validate the manifest with the
+bundled helper:
 
 ```bash
-scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
-scripts/openspec-validate-source-manifest <change-name> --project-root <project-root>
+<skill-dir>/scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
+<skill-dir>/scripts/openspec-validate-source-manifest <change-name> --project-root <project-root>
 ```
 
-Project-local fallback examples:
-
-```bash
-python3 openspec/scripts/generate-change-explainer-source-manifest.py <change-name>
-bash openspec/scripts/check-change-explainer-source-manifest.sh <change-name>
-```
-
-If no manifest tooling exists, report that validation could not be run.
+Never skip the manifest gate solely because the target workspace lacks
+`openspec/scripts/*`. If a project explicitly requires stricter local policy
+checks, run them only as additional evidence after the bundled manifest gate.
 
 ### 14. Generate `change-explainer.html`
 
@@ -604,9 +608,9 @@ OpenSpec sources. It is not a substitute for markdown/specs.
 
 The output is a **decision-review explainer**, not a generic summary page. A
 tool or wrapper returning `ok` is not sufficient proof of success. Success means
-the final `change-explainer.html` passes the target project's strict validator
-and visibly contains the governed decision-review affordances defined by the
-project prompt/policy.
+the final `change-explainer.html` passes the bundled strict validator (and any
+stricter target-project validator when present) and visibly contains the
+governed decision-review affordances defined by this skill and project policy.
 
 Do **not** use these shortcuts as the generation path when decision-review HTML
 is required:
@@ -630,23 +634,17 @@ For Beyourself-style explainers:
 1. Refresh source manifest:
 
    ```bash
-   python3 openspec/scripts/generate-change-explainer-source-manifest.py <change-name>
+   <skill-dir>/scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
    ```
 
-   If available, a helper may prepare context:
+   If the target project has a context-preparation helper, it may be used as an
+   optional convenience, but the writer skill does not depend on it.
 
-   ```bash
-   python3 openspec/scripts/generate-change-explainer-direct.py <change-name> --prepare
-   ```
-
-2. Read the governed prompt in full:
-
-   ```text
-   openspec/prompts/opendesign-change-explainer.md
-   ```
-
-   The historical file name may mention Open Design; the prompt rules still
-   apply to direct agent generation.
+2. Use the governed explainer rules in this section as the prompt contract. If
+   the target project also provides `openspec/prompts/opendesign-change-explainer.md`,
+   read it in full and apply any stricter project-local requirements. The
+   historical file name may mention Open Design; the prompt rules still apply to
+   direct agent generation.
 
 3. Read `openspec/changes/<change-name>/source-manifest.json`, then read every
    file listed in its `sources` array, typically:
@@ -686,32 +684,29 @@ summary page, rewrite it; do not rely on validators alone.
 Strict Beyourself validation:
 
 ```bash
-OPENSPEC_CHANGE_EXPLAINER_REQUIRE_DECISION_REVIEW=1 \
-  bash openspec/scripts/check-change-explainer.sh <change-name>
+<skill-dir>/scripts/openspec-validate-explainer <change-name> --project-root <project-root> --require-decision-review
 ```
 
-Expected strict output includes `STATUS=ok`, `DECISION_REVIEW_STATUS=ok`, and
-individual decision-review checks for primary navigation, before/after,
-decision points, implementation slices, verification plan, risk register,
-high-risk filter, copy controls, task JSON export, implementation/review/
-verification agent prompts, SVG visual, and mobile/tablet/desktop layout.
-
-If validation fails, fix the issues and re-validate. Do not report completion
-until the strict validator passes.
-
-Shared `openspec-workflow` validation can be used as an additional check only:
-
-```text
-openspec_workflow action=validate-explainer changeName=<change-name> projectRoot=<project-root>
-```
-
-or:
+Compatibility command for agents expecting the historical script name:
 
 ```bash
-scripts/openspec-validate-explainer <change-name> --project-root <project-root>
+OPENSPEC_CHANGE_EXPLAINER_REQUIRE_DECISION_REVIEW=1 \
+  <skill-dir>/scripts/check-change-explainer.sh <change-name> --project-root <project-root>
 ```
 
-Clean up generated context temp files if used:
+Expected strict output includes `status=ok` plus individual decision-review
+checks for primary navigation, before/after, decision points, implementation
+slices, verification plan, risk register, high-risk filter, copy controls, task
+JSON export, implementation/review/verification agent prompts, SVG visual, and
+responsive/mobile-tablet-desktop layout. If validation fails, fix the issues and
+re-validate. Do not report completion until the strict validator passes.
+
+If a project explicitly requires stricter local policy checks, run them only as
+additional evidence after the bundled strict validator has passed; never replace
+or skip the bundled validator.
+
+Clean up generated context temp files if optional project-local helpers created
+them:
 
 ```bash
 rm -f temp/explainer-contexts/<change-name>-context.md
@@ -778,24 +773,15 @@ otherwise record assumptions/open questions.
 Only run archive preflight as readiness evidence. Do not archive unless the user
 explicitly asks to close/archive.
 
-Preferred harness tool:
-
-```text
-openspec_workflow action=archive-preflight changeName=<change-name> projectRoot=<project-root>
-```
-
-Shell fallback:
+Run the bundled archive preflight first:
 
 ```bash
-scripts/openspec-archive-preflight <change-name> --project-root <project-root>
+<skill-dir>/scripts/openspec-archive-preflight <change-name> --project-root <project-root> --require-decision-review
 ```
 
-Project-local fallback examples:
-
-```bash
-bash openspec/scripts/check-archive-readiness.sh <change-name>
-bash openspec/scripts/check-change-explainer.sh <change-name>
-```
+If a project explicitly requires stricter local policy checks, run them only as
+additional evidence after the bundled archive preflight; never replace or skip
+the bundled preflight.
 
 Treat as blockers unless policy says otherwise:
 
@@ -826,6 +812,8 @@ When done, report:
 - Do not create implementation tasks that contradict module boundaries.
 - Do not create docs in retired paths such as `docs/superpowers/`.
 - Do not treat `change-explainer.html` as authoritative over markdown/specs.
+- Do not claim validation is unavailable only because the target repo lacks
+  `openspec/scripts/*`; use the bundled writer helper.
 - Do not archive without explicit user instruction.
 - Do not use archive history as current authority unless asked for historical
   rationale.

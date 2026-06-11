@@ -1,6 +1,6 @@
 # agent-goal-writer
 
-Standalone Pi skill folder for writing OpenSpec change packages from a user goal.
+Standalone Pi skill folder for writing OpenSpec change packages from a user goal. It includes bundled helper scripts so target workspaces do not need to vendor `openspec/scripts/*` or depend on a neighboring `openspec-workflow` checkout for normal validation.
 
 ## What it provides
 
@@ -20,7 +20,8 @@ It also covers update/review/explainer-only/archive-preflight modes for an
 existing OpenSpec change package.
 
 The skill keeps all authoring instructions directly in `SKILL.md`; there are no
-separate reference files to load for normal use.
+separate reference files to load for normal use. Automation needed by the skill
+is bundled under `scripts/` and uses only Python's standard library.
 
 ## BMAD-inspired improvements
 
@@ -42,7 +43,7 @@ It is for writing the OpenSpec specification/change package itself.
 Load directly:
 
 ```bash
-pi --skill /home/shawn/projects/active/agent-goal-writer
+pi --skill <path-to-agent-goal-writer>
 ```
 
 Or install/load from GitHub after publication:
@@ -65,10 +66,33 @@ Expected output is an OpenSpec change under:
 openspec/changes/<change-name>/
 ```
 
+## Bundled helpers
+
+Run these from the skill directory, or resolve them relative to `SKILL.md` when
+the skill is installed by Pi:
+
+```bash
+scripts/openspec-propose <change-name> --project-root <target-root> --capability <capability>
+scripts/openspec-build-source-manifest <change-name> --project-root <target-root>
+scripts/openspec-validate-source-manifest <change-name> --project-root <target-root>
+scripts/openspec-validate-explainer <change-name> --project-root <target-root> --require-decision-review
+scripts/openspec-archive-preflight <change-name> --project-root <target-root> --require-decision-review
+```
+
+Compatibility wrapper:
+
+```bash
+scripts/check-change-explainer.sh <change-name> --project-root <target-root> --require-decision-review
+```
+
 ## Relationship to nearby projects
 
-- `openspec-workflow` owns reusable workflow scripts and adapters.
-- `agent-goal-writer` is the prompt-level skill that tells an agent how to write,
-  review, validate, and prepare OpenSpec artifacts from a user goal.
+- `agent-goal-writer` owns the prompt-level workflow and the fallback automation
+  needed to scaffold, refresh manifests, validate explainers, and run archive
+  preflight checks.
+- External workflow packages or project-local `openspec/scripts/*` are not part
+  of the required writer-skill path. If a project explicitly requires stricter
+  local policy checks, treat those checks as additional evidence after the
+  bundled helpers have passed.
 - Target workspaces should reference/load this skill rather than vendoring a
   workspace-local duplicate.
