@@ -1,0 +1,26 @@
+{
+  "name": "agent-goal-writer",
+  "version": "0.2.0",
+  "description": "Pi skill for writing, reviewing, and validating OpenSpec change packages from a user goal.",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "agent-skills",
+    "openspec",
+    "spec-authoring",
+    "proposal",
+    "design",
+    "review",
+    "archive-preflight",
+    "change-explainer"
+  ],
+  "files": [
+    "SKILL.md",
+    "README.md"
+  ],
+  "pi": {
+    "skills": [
+      "."
+    ]
+  }
+}
