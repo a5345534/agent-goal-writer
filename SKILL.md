@@ -601,8 +601,9 @@ checks, run them only as additional evidence after the bundled manifest gate.
 
 ### 14. Generate `change-explainer.html`
 
-If the target project requires a companion explainer, generate it directly from
-OpenSpec sources. It is not a substitute for markdown/specs.
+For create and update modes, generate `change-explainer.html` directly from
+OpenSpec sources. It is part of the standard OpenSpec change package and is not
+a substitute for markdown/specs.
 
 #### Non-negotiable decision-review gate
 
