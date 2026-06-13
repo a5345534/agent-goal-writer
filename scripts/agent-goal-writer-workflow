@@ -1,0 +1,1016 @@
+#!/usr/bin/env python3
+"""Value-gated workflow helper for agent-goal-writer.
+
+The helper intentionally uses only the Python standard library. It creates and
+checks local `.writer-workflow` artifacts before an OpenSpec package is written,
+so agents have a machine-checkable pre-spec gate instead of relying only on
+prompt discipline.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+SCHEMA_VERSION = "1.0"
+ARTIFACT_DIR = ".writer-workflow"
+VALUE_GATE_FILE = "value-gate.json"
+STATUS_FILE = "status.json"
+PRE_SPEC_GATE_FILE = "pre-spec-gate.json"
+WRITE_SPEC_STATUS_FILE = "write-spec-status.json"
+VALID_STATUSES = ("blocked", "pass", "proceed_with_assumptions")
+CHANGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+EXIT_PASS = 0
+EXIT_BLOCKED = 20
+EXIT_ACK_REQUIRED = 30
+EXIT_INVALID_ARTIFACT = 40
+EXIT_WRITE_FAILED = 50
+EXIT_USAGE = 64
+
+EXIT_CODE_NAMES = {
+    EXIT_PASS: "pass",
+    EXIT_BLOCKED: "blocked",
+    EXIT_ACK_REQUIRED: "acknowledgement_required",
+    EXIT_INVALID_ARTIFACT: "invalid_artifact",
+    EXIT_WRITE_FAILED: "write_failed",
+    EXIT_USAGE: "usage_error",
+}
+
+PLACEHOLDER_VALUES = {
+    "",
+    "tbd",
+    "todo",
+    "n/a",
+    "na",
+    "none",
+    "unknown",
+    "replace me",
+    "replace-me",
+    "fill me",
+    "fill-me",
+}
+
+REQUIRED_PRE_SPEC_FIELDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("changeName",), "change name"),
+    (("capability",), "capability/spec name"),
+    (("goal",), "user goal or intended outcome"),
+    (("valueFrame", "beneficiary"), "beneficiary"),
+    (("valueFrame", "problemOrOpportunity"), "problem/opportunity"),
+    (("valueFrame", "whyNow"), "why now"),
+    (("valueFrame", "successSignal"), "success signal"),
+    (("valueFrame", "costRiskShape"), "cost/risk shape"),
+    (("valueFrame", "scopeSummary"), "smallest useful scope"),
+    (("valueFrame", "verificationPath"), "verification path"),
+    (("decision", "rationale"), "value-gate rationale"),
+    (("decision", "noBuildConsidered"), "no-build consideration"),
+    (("decision", "smallerScopeConsidered"), "smaller-scope consideration"),
+)
+
+README_TEMPLATE = """# Agent Goal Writer local workflow artifacts
+
+This directory is owned by `scripts/agent-goal-writer-workflow`.
+It records the value gate that must pass before an OpenSpec package is
+scaffolded or written.
+
+## Files
+
+- `value-gate.json` — machine-readable pre-spec gate state. Edit this file to
+  move from `blocked` to `pass` or `proceed_with_assumptions`.
+- `spec-kernel.md` — scratch template for the human-readable Spec Kernel.
+- `status.json`, `pre-spec-gate.json`, `write-spec-status.json` — reports
+  written by the helper.
+
+## Allowed statuses
+
+- `blocked`: do not write an OpenSpec package. Add blockers or open questions.
+- `pass`: value, scope, success, alternatives, and verification are clear enough
+  to write the package.
+- `proceed_with_assumptions`: progress is useful but uncertainty remains. This
+  status requires explicit acknowledgement before `gate --pre-spec` and
+  `write-spec` return success.
+
+## Exit codes
+
+- `0`: gate passed (`pass`, or acknowledged `proceed_with_assumptions`).
+- `20`: blocked status.
+- `30`: `proceed_with_assumptions` needs acknowledgement.
+- `40`: missing or invalid workflow artifact.
+- `50`: writing the OpenSpec package failed.
+- `64`: command-line usage error.
+"""
+
+SPEC_KERNEL_TEMPLATE = """# Spec Kernel
+
+Use this scratchpad before `write-spec`. Keep source-grounded claims here, then
+make sure they land in `proposal.md`, `design.md`, `tasks.md`, or the spec delta.
+
+- Why: <force behind the change>
+- Capabilities:
+  - <what users/systems must be able to do; WHAT, not HOW>
+- Constraints:
+  - <non-negotiable condition that bends design decisions>
+- Non-goals:
+  - <explicitly out of scope>
+- Success signal: <observable proof the change worked>
+- Assumptions:
+  - <[ASSUMPTION] inference or `None`>
+- Open questions:
+  - <decision still needed or `None`>
+"""
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def today() -> str:
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+
+def dump(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+class WorkflowArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:  # pragma: no cover - argparse hook
+        dump(
+            {
+                "schemaVersion": SCHEMA_VERSION,
+                "status": "usage_error",
+                "result": "usage_error",
+                "allowed": False,
+                "exitCode": EXIT_USAGE,
+                "exitCodeName": EXIT_CODE_NAMES[EXIT_USAGE],
+                "error": message,
+            }
+        )
+        raise SystemExit(EXIT_USAGE)
+
+
+def parser_factory(*args: Any, **kwargs: Any) -> WorkflowArgumentParser:
+    return WorkflowArgumentParser(*args, **kwargs)
+
+
+def json_report(command: str, status: str, result: str, exit_code: int, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schemaVersion": SCHEMA_VERSION,
+        "command": command,
+        "status": status,
+        "result": result,
+        "allowed": exit_code == EXIT_PASS,
+        "exitCode": exit_code,
+        "exitCodeName": EXIT_CODE_NAMES.get(exit_code, "unknown"),
+        "generatedAt": utc_now(),
+    }
+    payload.update(extra)
+    return payload
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    raw = path.read_text()
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON root must be an object: {path}")
+    return payload
+
+
+def project_root(raw: str | None) -> Path:
+    return Path(raw or ".").resolve()
+
+
+def resolve_under_root(root: Path, raw: str) -> Path:
+    path = Path(raw)
+    return path if path.is_absolute() else root / path
+
+
+def artifact_dir(root: Path, raw: str | None) -> Path:
+    return resolve_under_root(root, raw or ARTIFACT_DIR)
+
+
+def value_gate_path(root: Path, raw_artifact_dir: str | None) -> Path:
+    return artifact_dir(root, raw_artifact_dir) / VALUE_GATE_FILE
+
+
+def is_placeholder(value: Any) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in PLACEHOLDER_VALUES:
+        return True
+    if lowered.startswith("<") and lowered.endswith(">"):
+        return True
+    if "<" in lowered and ">" in lowered:
+        return True
+    if re.fullmatch(r"(?:tbd|todo)[\s.:-]*", lowered):
+        return True
+    return False
+
+
+def is_filled(value: Any) -> bool:
+    return not is_placeholder(value)
+
+
+def get_path(payload: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for part in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def set_path(payload: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    current = payload
+    for part in path[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[path[-1]] = value
+
+
+def list_items(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if is_filled(item)]
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        return [stripped] if is_filled(stripped) else []
+    return [str(raw).strip()] if is_filled(raw) else []
+
+
+def markdown_bullets(items: list[str], *, empty: str = "None", assumption: bool = False) -> str:
+    if not items:
+        return f"- {empty}"
+    rendered: list[str] = []
+    for item in items:
+        text = item.strip()
+        if assumption and text and not text.lower().startswith("[assumption]"):
+            text = f"[ASSUMPTION] {text}"
+        rendered.append(f"- {text}")
+    return "\n".join(rendered)
+
+
+def markdown_questions(items: list[str]) -> str:
+    if not items:
+        return "- [ ] None"
+    return "\n".join(f"- [ ] {item}" for item in items)
+
+
+def indent_markdown(text: str, prefix: str = "  ") -> str:
+    return "\n".join(f"{prefix}{line}" if line else line for line in text.splitlines())
+
+
+def validate_name(name: str, label: str, errors: list[str]) -> None:
+    if not CHANGE_NAME_RE.fullmatch(name):
+        errors.append(f"invalid_{label}: must match ^[a-z0-9][a-z0-9-]*$")
+
+
+def default_value_gate(change_name: str | None, capability: str | None, goal: str | None) -> dict[str, Any]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": "blocked",
+        "changeName": change_name or "",
+        "capability": capability or "",
+        "goal": goal or "",
+        "createdAt": utc_now(),
+        "updatedAt": utc_now(),
+        "valueFrame": {
+            "beneficiary": "",
+            "problemOrOpportunity": "",
+            "whyNow": "",
+            "successSignal": "",
+            "costRiskShape": "",
+            "noBuildCandidate": "",
+            "smallerScopeCandidate": "",
+            "scopeSummary": "",
+            "verificationPath": "",
+        },
+        "decision": {
+            "rationale": "",
+            "noBuildConsidered": "",
+            "smallerScopeConsidered": "",
+        },
+        "constraints": [],
+        "nonGoals": [],
+        "assumptions": [],
+        "risks": [],
+        "openQuestions": [],
+        "blockers": [
+            "Complete the valueFrame and decision fields, then set status to pass or proceed_with_assumptions."
+        ],
+        "acknowledgement": {
+            "requiredFor": "proceed_with_assumptions",
+            "accepted": False,
+            "acceptedAt": "",
+            "acceptedBy": "",
+            "rationale": "",
+        },
+    }
+
+
+def load_gate(root: Path, raw_artifact_dir: str | None, command: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path]:
+    base = artifact_dir(root, raw_artifact_dir)
+    path = base / VALUE_GATE_FILE
+    if not path.exists():
+        report = json_report(
+            command,
+            "blocked",
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(path),
+            errors=[f"missing {VALUE_GATE_FILE}; run init first"],
+        )
+        return None, report, base
+    try:
+        return read_json(path), None, base
+    except Exception as err:  # noqa: BLE001
+        report = json_report(
+            command,
+            "blocked",
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(path),
+            errors=[str(err)],
+        )
+        return None, report, base
+
+
+def acknowledgement_valid(payload: dict[str, Any]) -> tuple[bool, list[str]]:
+    ack = payload.get("acknowledgement")
+    if not isinstance(ack, dict):
+        return False, ["acknowledgement object is required"]
+    errors: list[str] = []
+    if ack.get("accepted") is not True:
+        errors.append("acknowledgement.accepted must be true")
+    if not is_filled(ack.get("rationale")):
+        errors.append("acknowledgement.rationale is required")
+    if not is_filled(ack.get("acceptedAt")):
+        errors.append("acknowledgement.acceptedAt is required")
+    if not is_filled(ack.get("acceptedBy")):
+        errors.append("acknowledgement.acceptedBy is required")
+    return not errors, errors
+
+
+def evaluate_gate(payload: dict[str, Any], command: str, base: Path) -> tuple[dict[str, Any], int]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: list[dict[str, str]] = []
+
+    if payload.get("schemaVersion") != SCHEMA_VERSION:
+        errors.append(f"schemaVersion must be {SCHEMA_VERSION}")
+
+    status = str(payload.get("status", "")).strip()
+    if status not in VALID_STATUSES:
+        errors.append("status must be one of: " + ", ".join(VALID_STATUSES))
+        status_for_report = "invalid_artifact"
+    else:
+        status_for_report = status
+
+    change_name = str(payload.get("changeName", "")).strip()
+    capability = str(payload.get("capability", "")).strip()
+    if change_name:
+        validate_name(change_name, "change_name", errors)
+    if capability:
+        validate_name(capability, "capability", errors)
+
+    if status in {"pass", "proceed_with_assumptions"}:
+        missing: list[str] = []
+        for path, label in REQUIRED_PRE_SPEC_FIELDS:
+            if not is_filled(get_path(payload, path)):
+                missing.append(label)
+        if missing:
+            errors.append("missing_or_placeholder_pre_spec_fields: " + ", ".join(missing))
+        assumptions = list_items(payload.get("assumptions"))
+        if status == "proceed_with_assumptions" and not assumptions:
+            errors.append("proceed_with_assumptions requires at least one assumption")
+        if status == "pass" and list_items(payload.get("openQuestions")):
+            warnings.append("status pass has openQuestions; use proceed_with_assumptions if they affect scope, value, or safety")
+
+    if status == "blocked" and not list_items(payload.get("blockers")) and not list_items(payload.get("openQuestions")):
+        warnings.append("blocked status should name at least one blocker or open question")
+
+    if errors:
+        checks.append({"name": "pre_spec_artifact", "status": "fail", "message": "; ".join(errors)})
+        report = json_report(
+            command,
+            status_for_report,
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(base / VALUE_GATE_FILE),
+            changeName=change_name,
+            capability=capability,
+            checks=checks,
+            warnings=warnings,
+            errors=errors,
+        )
+        return report, EXIT_INVALID_ARTIFACT
+
+    checks.append({"name": "pre_spec_artifact", "status": "pass", "message": "artifact schema and status are valid"})
+
+    common = {
+        "artifactDir": str(base),
+        "valueGateFile": str(base / VALUE_GATE_FILE),
+        "changeName": change_name,
+        "capability": capability,
+        "checks": checks,
+        "warnings": warnings,
+        "blockers": list_items(payload.get("blockers")),
+        "openQuestions": list_items(payload.get("openQuestions")),
+        "assumptions": list_items(payload.get("assumptions")),
+    }
+
+    if status == "blocked":
+        report = json_report(command, "blocked", "blocked", EXIT_BLOCKED, **common)
+        return report, EXIT_BLOCKED
+
+    if status == "proceed_with_assumptions":
+        accepted, ack_errors = acknowledgement_valid(payload)
+        if not accepted:
+            checks.append(
+                {
+                    "name": "assumption_acknowledgement",
+                    "status": "fail",
+                    "message": "; ".join(ack_errors),
+                }
+            )
+            report = json_report(
+                command,
+                "proceed_with_assumptions",
+                "acknowledgement_required",
+                EXIT_ACK_REQUIRED,
+                acknowledgementRequired=True,
+                acknowledgementErrors=ack_errors,
+                **common,
+            )
+            return report, EXIT_ACK_REQUIRED
+        checks.append(
+            {
+                "name": "assumption_acknowledgement",
+                "status": "pass",
+                "message": "proceed_with_assumptions has explicit acknowledgement",
+            }
+        )
+        report = json_report(
+            command,
+            "proceed_with_assumptions",
+            "pass",
+            EXIT_PASS,
+            acknowledgementRequired=False,
+            **common,
+        )
+        return report, EXIT_PASS
+
+    report = json_report(command, "pass", "pass", EXIT_PASS, **common)
+    return report, EXIT_PASS
+
+
+def apply_acknowledgement(payload: dict[str, Any], args: argparse.Namespace, path: Path) -> tuple[dict[str, Any] | None, int | None]:
+    if not getattr(args, "acknowledge_assumptions", False):
+        return None, None
+    rationale = getattr(args, "acknowledgement", None)
+    if not is_filled(rationale):
+        report = json_report(
+            getattr(args, "command", "gate"),
+            str(payload.get("status", "blocked")),
+            "usage_error",
+            EXIT_USAGE,
+            errors=["--acknowledge-assumptions requires --acknowledgement with a non-placeholder rationale"],
+        )
+        return report, EXIT_USAGE
+    accepted_by = getattr(args, "acknowledged_by", None) or os.environ.get("USER") or "unspecified"
+    ack = payload.get("acknowledgement")
+    if not isinstance(ack, dict):
+        ack = {}
+    ack.update(
+        {
+            "requiredFor": "proceed_with_assumptions",
+            "accepted": True,
+            "acceptedAt": utc_now(),
+            "acceptedBy": accepted_by,
+            "rationale": str(rationale).strip(),
+        }
+    )
+    payload["acknowledgement"] = ack
+    payload["updatedAt"] = utc_now()
+    write_json(path, payload)
+    return None, None
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_manifest(change_name: str, base: Path) -> dict[str, Any]:
+    sources: list[dict[str, str]] = []
+    for rel, kind in (("proposal.md", "proposal"), ("design.md", "design"), ("tasks.md", "tasks")):
+        path = base / rel
+        if path.exists():
+            sources.append({"path": rel, "kind": kind, "sha256": sha256_file(path)})
+    specs_dir = base / "specs"
+    if specs_dir.exists():
+        for spec_path in sorted(specs_dir.rglob("spec.md")):
+            sources.append(
+                {
+                    "path": spec_path.relative_to(base).as_posix(),
+                    "kind": "spec-delta",
+                    "sha256": sha256_file(spec_path),
+                }
+            )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": change_name,
+        "generatedAt": utc_now(),
+        "sources": sources,
+    }
+
+
+def write_text_file(path: Path, text: str, *, force: bool, written: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"refusing to overwrite existing file without --force: {path}")
+    path.write_text(text.rstrip() + "\n")
+    written.append(str(path))
+
+
+def value(payload: dict[str, Any], path: tuple[str, ...], fallback: str = "TBD") -> str:
+    raw = get_path(payload, path)
+    return str(raw).strip() if is_filled(raw) else fallback
+
+
+def outcome_label(status: str) -> str:
+    return "proceed_to_spec" if status == "pass" else "proceed_with_assumptions"
+
+
+def render_proposal(payload: dict[str, Any]) -> str:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    status = value(payload, ("status",), "pass")
+    assumptions = list_items(payload.get("assumptions"))
+    non_goals = list_items(payload.get("nonGoals"))
+    open_questions = list_items(payload.get("openQuestions"))
+    assumption_posture = "[ASSUMPTION]-tagged and explicitly acknowledged" if status == "proceed_with_assumptions" else "confirmed or not material"
+    return f"""# {change_name}
+
+## Why
+
+{value(payload, ("valueFrame", "problemOrOpportunity"))}
+
+Why now: {value(payload, ("valueFrame", "whyNow"))}
+
+Beneficiary: {value(payload, ("valueFrame", "beneficiary"))}
+
+## Value Gate
+
+- Outcome: `{outcome_label(status)}`
+- No-build considered: {value(payload, ("decision", "noBuildConsidered"))}
+- Smaller-scope considered: {value(payload, ("decision", "smallerScopeConsidered"))}
+- Assumption posture: {assumption_posture}
+
+## What Changes
+
+- {value(payload, ("valueFrame", "scopeSummary"))}
+
+## Impact
+
+- Affected specs: `{capability}`
+- Affected modules/repos: `TBD`
+- Affected APIs/events/data: `TBD`
+- Migration/deployment impact: `TBD`
+- User-visible impact: {value(payload, ("valueFrame", "beneficiary"))}
+
+## Non-Goals
+
+{markdown_bullets(non_goals, empty="TBD")}
+
+## Success Signal
+
+{value(payload, ("valueFrame", "successSignal"))}
+
+## Assumptions
+
+{markdown_bullets(assumptions, assumption=True)}
+
+## Open Questions
+
+{markdown_questions(open_questions)}
+"""
+
+
+def render_design(payload: dict[str, Any]) -> str:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    status = value(payload, ("status",), "pass")
+    assumptions = list_items(payload.get("assumptions"))
+    constraints = list_items(payload.get("constraints"))
+    non_goals = list_items(payload.get("nonGoals"))
+    risks = list_items(payload.get("risks"))
+    risk_rows = "\n".join(f"| {risk} | TBD | TBD |" for risk in risks) or "| TBD | TBD | TBD |"
+    return f"""# Design: {change_name}
+
+## Context
+
+{value(payload, ("goal",))}
+
+Current value frame: {value(payload, ("valueFrame", "problemOrOpportunity"))}
+
+Cost/risk shape: {value(payload, ("valueFrame", "costRiskShape"))}
+
+## Spec Kernel
+
+- Why: {value(payload, ("valueFrame", "problemOrOpportunity"))}
+- Value gate outcome: {outcome_label(status)}
+- Capabilities:
+  - `{capability}`: {value(payload, ("valueFrame", "scopeSummary"))}
+- Constraints:
+{indent_markdown(markdown_bullets(constraints, empty="TBD"))}
+- Non-goals:
+{indent_markdown(markdown_bullets(non_goals, empty="TBD"))}
+- Success signal: {value(payload, ("valueFrame", "successSignal"))}
+
+## Goals
+
+- Deliver the smallest useful `{capability}` scope described by the value gate.
+- Preserve the value, assumptions, and verification path in reviewable OpenSpec sources.
+
+## Non-Goals
+
+{markdown_bullets(non_goals, empty="TBD")}
+
+## Concern Scan
+
+| Concern | Relevance | Design response |
+| --- | --- | --- |
+| Value and scope drift | The gate exists to prevent writing low-value or over-broad work. | Keep implementation aligned with the scope summary and non-goals. |
+| Assumptions | Assumptions can change the implementation or verification decision. | Keep `[ASSUMPTION]` tags visible until review retires them. |
+
+## Decisions
+
+### D0. Value path
+
+**Choice**
+{outcome_label(status)}.
+
+**Rationale**
+{value(payload, ("decision", "rationale"))}
+
+**Alternatives considered**
+- No-build: {value(payload, ("decision", "noBuildConsidered"))}
+- Smaller/larger scope: {value(payload, ("decision", "smallerScopeConsidered"))}
+
+## Detailed Design
+
+### Data / Contract Changes
+
+TBD
+
+### Execution Flow
+
+TBD
+
+### Module Boundaries
+
+TBD
+
+### Migration / Rollout
+
+TBD
+
+## Risks
+
+| Risk | Severity | Mitigation |
+| --- | --- | --- |
+{risk_rows}
+
+## Verification Plan
+
+- {value(payload, ("valueFrame", "verificationPath"))}
+
+## Assumptions
+
+{markdown_bullets(assumptions, assumption=True)}
+
+## Load-Bearing Preservation Notes
+
+- Value gate status `{status}` and rationale are preserved in `proposal.md` and this design.
+- Success signal is preserved in `proposal.md`, this design, and the spec scenario.
+"""
+
+
+def render_tasks(payload: dict[str, Any]) -> str:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    verification = value(payload, ("valueFrame", "verificationPath"))
+    return f"""# Tasks: {change_name}
+
+## 1. Spec and Contract
+
+- [ ] 1.1 Update `{capability}` spec delta.
+- [ ] 1.2 Confirm affected APIs/events/data contracts.
+- [ ] 1.3 Retire or confirm any `[ASSUMPTION]` items before implementation-sensitive decisions.
+
+## 2. Implementation
+
+- [ ] 2.1 Implement the smallest useful scope recorded in the value gate.
+- [ ] 2.2 Preserve non-goals and boundaries from the design.
+
+## 3. Verification
+
+- [ ] 3.1 Run `{verification}`.
+- [ ] 3.2 Verify the success signal from `proposal.md`.
+
+## 4. Documentation / Closeout
+
+- [ ] 4.1 Update relevant docs if user-visible behavior, API contracts, deployment, module responsibility, or cross-module interaction changed.
+- [ ] 4.2 Refresh `source-manifest.json`.
+- [ ] 4.3 Validate `change-explainer.html` if required.
+- [ ] 4.4 Run archive preflight when implementation is complete.
+
+## Backlog / Follow-ups
+
+- [ ] [BACKLOG] Add non-blocking deferred work only after the proposal/design name it as out of scope.
+"""
+
+
+def render_spec(payload: dict[str, Any]) -> str:
+    capability = value(payload, ("capability",))
+    scope = value(payload, ("valueFrame", "scopeSummary"))
+    success = value(payload, ("valueFrame", "successSignal"))
+    return f"""# {capability} Specification
+
+## Purpose
+
+This capability owns the behavior needed to satisfy the value-gated scope for this change.
+
+## Requirements
+
+### Requirement: Value-gated scope
+
+The system SHALL provide the smallest useful behavior described by this change: {scope}
+
+#### Scenario: Success signal is observable
+
+- **GIVEN** the change has been implemented
+- **WHEN** reviewers run the verification path
+- **THEN** they can observe: {success}
+"""
+
+
+def render_yaml(payload: dict[str, Any]) -> str:
+    return f"""name: {value(payload, ("changeName",))}
+created: {today()}
+status: draft
+valueGateStatus: {value(payload, ("status",), "pass")}
+"""
+
+
+def write_spec_package(payload: dict[str, Any], root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    changes_dir = resolve_under_root(root, args.changes_dir or "openspec/changes")
+    base = changes_dir / change_name
+    if base.exists() and any(base.iterdir()) and not args.force:
+        raise FileExistsError(f"change directory exists and is not empty; use --force to overwrite helper-managed files: {base}")
+
+    written: list[str] = []
+    write_text_file(base / ".openspec.yaml", render_yaml(payload), force=args.force, written=written)
+    write_text_file(base / "proposal.md", render_proposal(payload), force=args.force, written=written)
+    write_text_file(base / "design.md", render_design(payload), force=args.force, written=written)
+    write_text_file(base / "tasks.md", render_tasks(payload), force=args.force, written=written)
+    write_text_file(base / "specs" / capability / "spec.md", render_spec(payload), force=args.force, written=written)
+    manifest = build_manifest(change_name, base)
+    manifest_path = base / "source-manifest.json"
+    write_json(manifest_path, manifest)
+    written.append(str(manifest_path))
+    return {"changeDir": str(base), "files": written, "sourceManifest": str(manifest_path)}
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    base = artifact_dir(root, args.artifact_dir)
+    errors: list[str] = []
+    if args.change_name and not CHANGE_NAME_RE.fullmatch(args.change_name):
+        errors.append("--change-name must match ^[a-z0-9][a-z0-9-]*$")
+    if args.capability and not CHANGE_NAME_RE.fullmatch(args.capability):
+        errors.append("--capability must match ^[a-z0-9][a-z0-9-]*$")
+    if errors:
+        report = json_report("init", "invalid_artifact", "usage_error", EXIT_USAGE, errors=errors)
+        dump(report)
+        return EXIT_USAGE
+
+    base.mkdir(parents=True, exist_ok=True)
+    gate_path = base / VALUE_GATE_FILE
+    written: list[str] = []
+    if gate_path.exists() and not args.force:
+        report = json_report(
+            "init",
+            "blocked",
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(gate_path),
+            errors=[f"{VALUE_GATE_FILE} already exists; use --force to replace it"],
+        )
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+
+    write_json(gate_path, default_value_gate(args.change_name, args.capability, args.goal))
+    written.append(str(gate_path))
+    kernel_path = base / "spec-kernel.md"
+    if args.force or not kernel_path.exists():
+        kernel_path.write_text(SPEC_KERNEL_TEMPLATE)
+        written.append(str(kernel_path))
+    readme_path = base / "README.md"
+    if args.force or not readme_path.exists():
+        readme_path.write_text(README_TEMPLATE)
+        written.append(str(readme_path))
+
+    report = json_report(
+        "init",
+        "blocked",
+        "initialized",
+        EXIT_PASS,
+        allowed=False,
+        artifactDir=str(base),
+        valueGateFile=str(gate_path),
+        files=written,
+        nextSteps=[
+            f"Edit {gate_path} and set status to pass or proceed_with_assumptions.",
+            "Run `scripts/agent-goal-writer-workflow check`.",
+            "Run `scripts/agent-goal-writer-workflow gate --pre-spec` before write-spec.",
+        ],
+    )
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return EXIT_PASS
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    payload, error_report, base = load_gate(root, args.artifact_dir, "check")
+    if error_report is not None:
+        write_json(base / STATUS_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    report, code = evaluate_gate(payload, "check", base)
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return code
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    base = artifact_dir(root, args.artifact_dir)
+    if not args.pre_spec:
+        report = json_report("gate", "usage_error", "usage_error", EXIT_USAGE, errors=["gate requires --pre-spec"])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "gate")
+    if error_report is not None:
+        write_json(base / PRE_SPEC_GATE_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    ack_report, ack_code = apply_acknowledgement(payload, args, base / VALUE_GATE_FILE)
+    if ack_report is not None:
+        write_json(base / PRE_SPEC_GATE_FILE, ack_report)
+        dump(ack_report)
+        return int(ack_code or EXIT_USAGE)
+    report, code = evaluate_gate(payload, "gate", base)
+    write_json(base / PRE_SPEC_GATE_FILE, report)
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return code
+
+
+def cmd_write_spec(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    payload, error_report, base = load_gate(root, args.artifact_dir, "write-spec")
+    if error_report is not None:
+        write_json(base / WRITE_SPEC_STATUS_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    ack_report, ack_code = apply_acknowledgement(payload, args, base / VALUE_GATE_FILE)
+    if ack_report is not None:
+        write_json(base / WRITE_SPEC_STATUS_FILE, ack_report)
+        dump(ack_report)
+        return int(ack_code or EXIT_USAGE)
+
+    gate_report, gate_code = evaluate_gate(payload, "write-spec", base)
+    if gate_code != EXIT_PASS:
+        write_json(base / WRITE_SPEC_STATUS_FILE, gate_report)
+        write_json(base / STATUS_FILE, gate_report)
+        dump(gate_report)
+        return gate_code
+
+    try:
+        result = write_spec_package(payload, root, args)
+    except Exception as err:  # noqa: BLE001
+        report = json_report(
+            "write-spec",
+            str(gate_report.get("status", "blocked")),
+            "write_failed",
+            EXIT_WRITE_FAILED,
+            artifactDir=str(base),
+            valueGateFile=str(base / VALUE_GATE_FILE),
+            errors=[str(err)],
+        )
+        write_json(base / WRITE_SPEC_STATUS_FILE, report)
+        dump(report)
+        return EXIT_WRITE_FAILED
+
+    report = dict(gate_report)
+    report.update(
+        {
+            "command": "write-spec",
+            "result": "written",
+            "allowed": True,
+            "exitCode": EXIT_PASS,
+            "exitCodeName": EXIT_CODE_NAMES[EXIT_PASS],
+            "writeSpec": result,
+            "generatedAt": utc_now(),
+        }
+    )
+    write_json(base / WRITE_SPEC_STATUS_FILE, report)
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return EXIT_PASS
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = WorkflowArgumentParser(description="Value-gated workflow helper for agent-goal-writer")
+    parser.add_argument("--json", action="store_true", help="emit JSON output (default)")
+    parser.add_argument("--project-root", default=argparse.SUPPRESS, help="target project root")
+    parser.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
+    subparsers = parser.add_subparsers(dest="command", required=True, parser_class=WorkflowArgumentParser)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument("--project-root", default=argparse.SUPPRESS, help="target project root")
+    common.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
+
+    init = subparsers.add_parser("init", parents=[common], help="create .writer-workflow artifacts")
+    init.add_argument("--change-name", help="kebab-case OpenSpec change name")
+    init.add_argument("--capability", help="kebab-case OpenSpec capability/spec name")
+    init.add_argument("--goal", help="source user goal or intended outcome")
+    init.add_argument("--force", action="store_true", help="replace existing helper artifacts")
+    init.set_defaults(func=cmd_init)
+
+    check = subparsers.add_parser("check", parents=[common], help="validate workflow artifacts and report gate status")
+    check.set_defaults(func=cmd_check)
+
+    gate = subparsers.add_parser("gate", parents=[common], help="enforce workflow gates")
+    gate.add_argument("--pre-spec", action="store_true", help="enforce the value gate before OpenSpec writing")
+    gate.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
+    gate.add_argument("--acknowledgement", help="acknowledgement rationale required with --acknowledge-assumptions")
+    gate.add_argument("--acknowledged-by", help="identity recorded for assumption acknowledgement")
+    gate.set_defaults(func=cmd_gate)
+
+    write_spec = subparsers.add_parser("write-spec", parents=[common], help="write OpenSpec templates after the pre-spec gate passes")
+    write_spec.add_argument("--changes-dir", default="openspec/changes", help="OpenSpec changes directory, relative to project root unless absolute")
+    write_spec.add_argument("--force", action="store_true", help="overwrite helper-managed OpenSpec files")
+    write_spec.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
+    write_spec.add_argument("--acknowledgement", help="acknowledgement rationale required with --acknowledge-assumptions")
+    write_spec.add_argument("--acknowledged-by", help="identity recorded for assumption acknowledgement")
+    write_spec.set_defaults(func=cmd_write_spec)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not hasattr(args, "project_root"):
+        args.project_root = "."
+    if not hasattr(args, "artifact_dir"):
+        args.artifact_dir = ARTIFACT_DIR
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

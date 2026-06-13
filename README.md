@@ -72,12 +72,22 @@ Run these from the skill directory, or resolve them relative to `SKILL.md` when
 the skill is installed by Pi:
 
 ```bash
+scripts/agent-goal-writer-workflow init --project-root <target-root> --change-name <change-name> --capability <capability> --goal "<goal>"
+scripts/agent-goal-writer-workflow check --project-root <target-root>
+scripts/agent-goal-writer-workflow gate --pre-spec --project-root <target-root>
+scripts/agent-goal-writer-workflow write-spec --project-root <target-root>
 scripts/openspec-propose <change-name> --project-root <target-root> --capability <capability>
 scripts/openspec-build-source-manifest <change-name> --project-root <target-root>
 scripts/openspec-validate-source-manifest <change-name> --project-root <target-root>
 scripts/openspec-validate-explainer <change-name> --project-root <target-root> --require-decision-review
 scripts/openspec-archive-preflight <change-name> --project-root <target-root> --require-decision-review
 ```
+
+The workflow helper creates `.writer-workflow/` artifacts and emits JSON status
+for `blocked`, `pass`, and `proceed_with_assumptions`. Exit codes are stable:
+`0` pass, `20` blocked, `30` acknowledgement required, `40` invalid artifact,
+`50` write failed, and `64` usage error. `proceed_with_assumptions` requires an
+explicit acknowledgement before `gate --pre-spec` or `write-spec` can proceed.
 
 Compatibility wrapper:
 
