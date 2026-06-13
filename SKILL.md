@@ -201,6 +201,10 @@ Resolve `<skill-dir>` to the directory containing this `SKILL.md`. The skill
 ships these helper entrypoints and they use only Python's standard library:
 
 ```bash
+<skill-dir>/scripts/agent-goal-writer-workflow init --project-root <project-root> --change-name <change-name> --capability <capability> --goal "<goal>"
+<skill-dir>/scripts/agent-goal-writer-workflow check --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow gate --pre-spec --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow write-spec --project-root <project-root>
 <skill-dir>/scripts/openspec-propose <change-name> --project-root <project-root> --capability <capability>
 <skill-dir>/scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
 <skill-dir>/scripts/openspec-validate-source-manifest <change-name> --project-root <project-root>
@@ -214,6 +218,11 @@ name:
 ```bash
 <skill-dir>/scripts/check-change-explainer.sh <change-name> --project-root <project-root> --require-decision-review
 ```
+
+The workflow helper creates `.writer-workflow/` artifacts, emits JSON status, and
+enforces only `blocked`, `pass`, and `proceed_with_assumptions` pre-spec states.
+`proceed_with_assumptions` requires an explicit acknowledgement before
+`gate --pre-spec` or `write-spec` can return success.
 
 Never report that automatic validation is unavailable merely because the target
 workspace lacks `openspec/scripts/check-change-explainer.sh` or any external
@@ -485,16 +494,24 @@ Capability/spec name rules:
 
 ### 9. Scaffold the OpenSpec change
 
-Use the bundled skill helper first:
+Use the bundled workflow helper first to materialize `.writer-workflow/`, record
+and check the pre-spec gate, and only then write the starter OpenSpec package:
 
 ```bash
-<skill-dir>/scripts/openspec-propose <change-name> --project-root <project-root> --capability <capability>
+<skill-dir>/scripts/agent-goal-writer-workflow init --project-root <project-root> --change-name <change-name> --capability <capability> --goal "<goal>"
+<skill-dir>/scripts/agent-goal-writer-workflow check --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow gate --pre-spec --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow write-spec --project-root <project-root>
 ```
 
-This creates the standard package, including `.openspec.yaml`,
-`proposal.md`, `design.md`, `tasks.md`, `source-manifest.json`, and a starter
-`specs/<capability>/spec.md`. Rewrite the generated markdown/spec content with
-the source-grounded templates below; the scaffold is only a starting point.
+`gate --pre-spec` must report `pass`, or acknowledged
+`proceed_with_assumptions`, before files are written. The helper creates the
+standard package, including `.openspec.yaml`, `proposal.md`, `design.md`,
+`tasks.md`, `source-manifest.json`, and a starter `specs/<capability>/spec.md`.
+Rewrite the generated markdown/spec content with the source-grounded templates
+below; the scaffold is only a starting point. The legacy `openspec-propose`
+helper remains available for compatibility when the value gate has already been
+recorded elsewhere.
 
 Do not depend on any external scaffold tool being present. If a project
 explicitly requires stricter local policy checks, run them only as additional
