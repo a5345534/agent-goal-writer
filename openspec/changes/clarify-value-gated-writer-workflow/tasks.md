@@ -6,12 +6,12 @@
 - [x] 1.2 Add the value-gated workflow stages before the current OpenSpec scaffold/write steps.
 - [x] 1.3 Document the Value Challenge Gate, constructive disagreement protocol, no-build option, smaller-scope option, and `proceed_with_assumptions` path.
 - [x] 1.4 Update the quality rubric so pre-spec quality is checked before `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md` are written.
-- [x] 1.5 Clarify that `.writer-workflow/changes/<change-name>/` is workspace-local operational state, while OpenSpec markdown/spec files remain the governed sources of truth.
+- [x] 1.5 Clarify that `.goal-spec/changes/<change-name>/` is workspace-local operational state, while OpenSpec markdown/spec files remain the governed sources of truth.
 
 ## 2. Workflow Helper Script
 
 - [x] 2.1 Add `scripts/goal-spec-workflow` using only the Python standard library.
-- [x] 2.2 Implement `init <change-name> --capability <capability>` to create workspace-local `.writer-workflow/changes/<change-name>/` artifacts.
+- [x] 2.2 Implement `init <change-name> --capability <capability>` to create workspace-local `.goal-spec/changes/<change-name>/` artifacts.
 - [x] 2.3 Implement `check <change-name>` for value-gate artifact completeness.
 - [x] 2.4 Implement `gate <change-name> --pre-spec` to write `pre-spec-gate.json` with `blocked`, `pass`, or `proceed_with_assumptions`.
 - [x] 2.5 Implement `write-spec <change-name>` so it fails unless the latest pre-spec gate status is `pass` or acknowledged `proceed_with_assumptions`.
@@ -19,7 +19,7 @@
 
 ## 3. Artifact Templates and Preservation
 
-- [x] 3.1 Add templates/reports for `value-gate.json`, `spec-kernel.md`, `status.json`, `pre-spec-gate.json`, and `write-spec-status.json` under `.writer-workflow/changes/<change-name>/`.
+- [x] 3.1 Add templates/reports for `value-gate.json`, `spec-kernel.md`, `status.json`, `pre-spec-gate.json`, and `write-spec-status.json` under `.goal-spec/changes/<change-name>/`.
 - [x] 3.2 Ensure templates distinguish problem, affected actor, value evidence, no-build alternative, smaller-scope alternative, non-goals, assumptions, open questions, and verification path.
 - [x] 3.3 Ensure `proceed_with_assumptions` requires explicit user acknowledgement and lists unresolved assumptions/value risks.
 - [x] 3.4 Ensure OpenSpec writing guidance requires value challenge outputs to land in `proposal.md` and `design.md`.
@@ -31,7 +31,8 @@
 - [x] 4.3 Add passing-gate coverage for a complete spec kernel.
 - [x] 4.4 Add `proceed_with_assumptions` coverage that fails without explicit acknowledgement and passes with acknowledgement.
 - [x] 4.5 Add `write-spec` coverage proving OpenSpec writing cannot start before the gate passes.
-- [x] 4.6 Add coverage that positional `<change-name>` uses `.writer-workflow/changes/<change-name>/` and can complete check/gate/write-spec.
+- [x] 4.6 Add coverage that positional `<change-name>` uses `.goal-spec/changes/<change-name>/` and can complete check/gate/write-spec.
+- [x] 4.7 Add coverage that legacy `.writer-workflow/changes/<change-name>/` state migrates to `.goal-spec/changes/<change-name>/` with a JSON warning.
 - [x] 4.7 Run `scripts/test-workflow`.
 
 ## 5. Documentation and Closeout

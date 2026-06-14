@@ -2,7 +2,7 @@
 
 ## Context
 
-The current writer workflow has established the right boundary: `.writer-workflow/changes/<change-name>/` is workspace-local operational state, while `openspec/changes/<change-name>/` remains the governed source package. The next limitation is the shape of that operational state.
+The current writer workflow has established the right boundary: `.goal-spec/changes/<change-name>/` is workspace-local operational state, while `openspec/changes/<change-name>/` remains the governed source package. The next limitation is the shape of that operational state.
 
 A single value-gate artifact can answer “is this complete enough to write a spec?”, but it cannot fully answer:
 
@@ -26,7 +26,7 @@ Omnigent demonstrates useful production patterns for this class of problem: phas
   - Detect repeated clarification/challenge loops and force a decision path.
   - Allow registry-style configuration of phase templates and deterministic checks.
 - Constraints:
-  - `.writer-workflow/changes/<change-name>/` remains workspace-local operational state.
+  - `.goal-spec/changes/<change-name>/` remains workspace-local operational state.
   - OpenSpec markdown/spec files remain the authoritative governed source.
   - No Omnigent runtime dependency or copied implementation code.
   - Existing `init/check/gate/write-spec` commands remain compatible.
@@ -71,7 +71,7 @@ Omnigent demonstrates useful production patterns for this class of problem: phas
 Add a new workspace-local state file:
 
 ```text
-.writer-workflow/changes/<change-name>/workflow-state.json
+.goal-spec/changes/<change-name>/workflow-state.json
 ```
 
 Initial shape:
@@ -273,7 +273,7 @@ Omnigent's `DomainRegistry` avoids global behavior leaks and centralizes customi
 
 ### Data / Contract Changes
 
-New workspace-local artifacts under `.writer-workflow/changes/<change-name>/`:
+New workspace-local artifacts under `.goal-spec/changes/<change-name>/`:
 
 | File | Purpose | Authority |
 | --- | --- | --- |
@@ -309,7 +309,7 @@ Existing files remain valid:
 - `SKILL.md` owns prompt-level behavior: when to challenge, when to proceed, and what must be preserved.
 - `scripts/goal-spec-workflow` owns deterministic workspace-state artifacts and gate checks.
 - `scripts/openspec-*` helpers own manifest, explainer, and archive validation.
-- `.writer-workflow/changes/<change-name>/` is workspace-local and should stay out of governed OpenSpec sources except as summarized in proposal/design/tasks/spec.
+- `.goal-spec/changes/<change-name>/` is workspace-local and should stay out of governed OpenSpec sources except as summarized in proposal/design/tasks/spec.
 
 ### Migration / Rollout
 
@@ -330,7 +330,7 @@ Existing files remain valid:
 
 ## Verification Plan
 
-- Add unit/fixture checks that `init <change-name>` creates the new phase-aware files under `.writer-workflow/changes/<change-name>/`.
+- Add unit/fixture checks that `init <change-name>` creates the new phase-aware files under `.goal-spec/changes/<change-name>/`.
 - Verify `check <change-name>` reports active phase and missing required phase/claim data.
 - Verify repeated normalized clarification/challenge text increments loop guards and blocks repeated prompts after the limit.
 - Verify recovery output recommends exactly one next action.
@@ -344,5 +344,5 @@ Existing files remain valid:
 
 - User asked whether Omnigent has useful ideas → preserved as explicit Omnigent-inspired but dependency-free design.
 - Valuable Omnigent patterns identified: phase planner, registry pattern, extract/reflect/recover, reasoning graph, loop/circuit breaker, context/state preservation → mapped into workflow-state, registry-style structures, claim graph, and loop guards.
-- User boundary from prior discussion: `.writer-workflow/` is workspace capability, not OpenSpec package content → preserved by keeping all new artifacts under `.writer-workflow/changes/<change-name>/` and marking them operational.
+- User boundary from prior discussion: `.goal-spec/` is workspace capability, not OpenSpec package content → preserved by keeping all new artifacts under `.goal-spec/changes/<change-name>/` and marking them operational.
 - Existing skill rule: OpenSpec markdown/spec files remain source of truth → preserved in authority and module boundary sections.

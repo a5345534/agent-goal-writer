@@ -40,7 +40,7 @@
       <h2>Before / After</h2>
       <div class="grid">
         <div class="card"><h3>變更前 Before</h3><ul><li>主要依賴 <code>value-gate.json</code> 判斷 pre-spec readiness。</li><li>phase progress、recovery 建議與重複問題沒有完整結構。</li><li>load-bearing preservation 主要靠人工與 design notes。</li></ul></div>
-        <div class="card"><h3>變更後 After</h3><ul><li><code>.writer-workflow/changes/&lt;change-name&gt;/workflow-state.json</code> 可 resume phase progress。</li><li>extract/reflect/recover 讓價值挑戰與下一步更可檢查。</li><li><code>claim-graph.json</code> 可阻擋未保存的 load-bearing claims。</li></ul></div>
+        <div class="card"><h3>變更後 After</h3><ul><li><code>.goal-spec/changes/&lt;change-name&gt;/workflow-state.json</code> 可 resume phase progress。</li><li>extract/reflect/recover 讓價值挑戰與下一步更可檢查。</li><li><code>claim-graph.json</code> 可阻擋未保存的 load-bearing claims。</li></ul></div>
       </div>
     </section>
 
@@ -66,7 +66,7 @@
       <h2>受影響面</h2>
       <table><thead><tr><th>Surface</th><th>Impact</th></tr></thead><tbody>
         <tr><td><code>scripts/goal-spec-workflow</code></td><td>新增 phase state、pipeline artifacts、claim graph、loop guards、registry-style data structures。</td></tr>
-        <tr><td><code>.writer-workflow/changes/&lt;change-name&gt;/</code></td><td>新增 workflow-state、extracted-claims、reflection-report、recovery-actions、claim-graph。</td></tr>
+        <tr><td><code>.goal-spec/changes/&lt;change-name&gt;/</code></td><td>新增 workflow-state、extracted-claims、reflection-report、recovery-actions、claim-graph。</td></tr>
         <tr><td><code>SKILL.md</code> / <code>README.md</code></td><td>描述 structured workflow phases 與 source-of-truth boundary。</td></tr>
         <tr><td>OpenSpec package</td><td>保存 load-bearing workflow conclusions；不把 workflow state 當權威來源。</td></tr>
       </tbody></table>
@@ -116,7 +116,7 @@
 
     <section id="agent-prompts">
       <h2>Copyable agent prompts</h2>
-      <div class="grid three"><div class="card"><h3>Implementation agent prompt 實作代理提示</h3><button data-copy="#impl-prompt">複製</button><pre id="impl-prompt">Implement add-structured-writer-workflow-phases. Add workflow-state.json, extract/reflect/recover artifacts, claim-graph preservation checks, loop guards, registry-style organization, tests, README/SKILL updates, and OpenSpec validation.</pre></div><div class="card"><h3>Review agent prompt 審查代理提示</h3><button data-copy="#review-prompt">複製</button><pre id="review-prompt">Review whether the implementation borrows Omnigent patterns without adding dependencies, keeps .writer-workflow workspace-local, preserves load-bearing claims in OpenSpec, and prevents repeated clarification/challenge loops.</pre></div><div class="card"><h3>Verification agent prompt 驗證代理提示</h3><button data-copy="#verify-prompt">複製</button><pre id="verify-prompt">Run workflow fixture tests for phase state, extract/reflect/recover outputs, claim graph blockers, loop guards, manifest validation, and strict decision-review explainer validation.</pre></div></div>
+      <div class="grid three"><div class="card"><h3>Implementation agent prompt 實作代理提示</h3><button data-copy="#impl-prompt">複製</button><pre id="impl-prompt">Implement add-structured-writer-workflow-phases. Add workflow-state.json, extract/reflect/recover artifacts, claim-graph preservation checks, loop guards, registry-style organization, tests, README/SKILL updates, and OpenSpec validation.</pre></div><div class="card"><h3>Review agent prompt 審查代理提示</h3><button data-copy="#review-prompt">複製</button><pre id="review-prompt">Review whether the implementation borrows Omnigent patterns without adding dependencies, keeps .goal-spec workspace-local, preserves load-bearing claims in OpenSpec, and prevents repeated clarification/challenge loops.</pre></div><div class="card"><h3>Verification agent prompt 驗證代理提示</h3><button data-copy="#verify-prompt">複製</button><pre id="verify-prompt">Run workflow fixture tests for phase state, extract/reflect/recover outputs, claim graph blockers, loop guards, manifest validation, and strict decision-review explainer validation.</pre></div></div>
     </section>
 
     <section id="task-json-export">

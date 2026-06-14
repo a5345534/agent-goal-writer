@@ -3,7 +3,7 @@
 ## 1. Spec and Skill Contract
 
 - [x] 1.1 Update `SKILL.md` to describe phase-aware workflow state, extract/reflect/recover, claim graph preservation, and loop guard behavior.
-- [x] 1.2 Clarify that `.writer-workflow/changes/<change-name>/` remains workspace-local operational state and OpenSpec markdown/spec files remain authoritative.
+- [x] 1.2 Clarify that `.goal-spec/changes/<change-name>/` remains workspace-local operational state and OpenSpec markdown/spec files remain authoritative.
 - [x] 1.3 Document when loop guards should recommend no-build, smaller-scope, blocking question, or `proceed_with_assumptions`.
 - [x] 1.4 Update `README.md` with the new workflow-state artifacts and command behavior.
 

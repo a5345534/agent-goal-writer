@@ -59,7 +59,7 @@
     },
     {
       "id": "workflow-helper",
-      "objective": "Add scripts/goal-spec-workflow using only standard-library automation or a thin wrapper around it. Implement init, check, gate --pre-spec, and write-spec; create .writer-workflow artifacts; enforce blocked/pass/proceed_with_assumptions statuses; require explicit acknowledgement for proceed_with_assumptions; and return stable non-zero exit codes plus machine-readable status output.",
+      "objective": "Add scripts/goal-spec-workflow using only standard-library automation or a thin wrapper around it. Implement init, check, gate --pre-spec, and write-spec; create .goal-spec artifacts; enforce blocked/pass/proceed_with_assumptions statuses; require explicit acknowledgement for proceed_with_assumptions; and return stable non-zero exit codes plus machine-readable status output.",
       "outputs": [
         "scripts/goal-spec-workflow"
       ],

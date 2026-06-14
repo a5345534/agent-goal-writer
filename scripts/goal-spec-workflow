@@ -2,9 +2,9 @@
 """Value-gated workflow helper for goal-spec.
 
 The helper intentionally uses only the Python standard library. It creates and
-checks local `.writer-workflow` artifacts before an OpenSpec package is written,
-so agents have a machine-checkable pre-spec gate instead of relying only on
-prompt discipline.
+checks local `.goal-spec` artifacts before an OpenSpec package is written, so
+agents have a machine-checkable pre-spec gate instead of relying only on prompt
+discipline.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "1.0"
-ARTIFACT_ROOT = ".writer-workflow"
+ARTIFACT_ROOT = ".goal-spec"
+LEGACY_ARTIFACT_ROOT = ".writer-workflow"
 CHANGE_ARTIFACTS_DIR = "changes"
 ARTIFACT_DIR = ARTIFACT_ROOT
 VALUE_GATE_FILE = "value-gate.json"
@@ -189,8 +190,9 @@ README_TEMPLATE = """# Goal Spec local workflow artifacts
 This directory is owned by `scripts/goal-spec-workflow`.
 It records the workspace-local value gate for one OpenSpec change before that
 package is scaffolded or written. The normal location is
-`.writer-workflow/changes/<change-name>/`; the OpenSpec package remains under
-`openspec/changes/<change-name>/`.
+`.goal-spec/changes/<change-name>/`; the OpenSpec package remains under
+`openspec/changes/<change-name>/`. Legacy `.writer-workflow/` directories are
+migrated automatically when no explicit `--artifact-dir` override is used.
 
 ## Files
 
@@ -292,6 +294,22 @@ def json_report(command: str, status: str, result: str, exit_code: int, **extra:
     return payload
 
 
+def add_report_warnings(report: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+    if not warnings:
+        return report
+    existing = report.get("warnings")
+    merged: list[str] = []
+    if isinstance(existing, list):
+        merged.extend(str(item) for item in existing)
+    elif existing:
+        merged.append(str(existing))
+    for warning in warnings:
+        if warning not in merged:
+            merged.append(warning)
+    report["warnings"] = merged
+    return report
+
+
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
@@ -343,8 +361,49 @@ def artifact_dir(root: Path, raw: str | None, change_name: str | None = None) ->
     return root / ARTIFACT_ROOT
 
 
+def legacy_artifact_dir(root: Path, change_name: str | None = None) -> Path:
+    if change_name:
+        return root / LEGACY_ARTIFACT_ROOT / CHANGE_ARTIFACTS_DIR / change_name
+    return root / LEGACY_ARTIFACT_ROOT
+
+
+def remove_empty_legacy_parents(path: Path, root: Path) -> None:
+    stop = root / LEGACY_ARTIFACT_ROOT
+    current = path.parent
+    while current != root and current != current.parent:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        if current == stop:
+            break
+        current = current.parent
+
+
+def workflow_artifact_dir(root: Path, raw: str | None, change_name: str | None = None) -> tuple[Path, list[str]]:
+    base = artifact_dir(root, raw, change_name)
+    if raw:
+        return base, []
+
+    legacy = legacy_artifact_dir(root, change_name)
+    warnings: list[str] = []
+    if base.exists():
+        if legacy.exists():
+            warnings.append(
+                f"legacy artifact directory {legacy} still exists; using {base}. Remove or migrate it to avoid stale workflow state."
+            )
+        return base, warnings
+    if legacy.exists():
+        base.parent.mkdir(parents=True, exist_ok=True)
+        legacy.replace(base)
+        remove_empty_legacy_parents(legacy, root)
+        warnings.append(f"migrated legacy artifact directory from {legacy} to {base}")
+    return base, warnings
+
+
 def value_gate_path(root: Path, raw_artifact_dir: str | None, change_name: str | None = None) -> Path:
-    return artifact_dir(root, raw_artifact_dir, change_name) / VALUE_GATE_FILE
+    base, _warnings = workflow_artifact_dir(root, raw_artifact_dir, change_name)
+    return base / VALUE_GATE_FILE
 
 
 def is_placeholder(value: Any) -> bool:
@@ -802,8 +861,8 @@ def load_gate(
     raw_artifact_dir: str | None,
     command: str,
     change_name: str | None = None,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path]:
-    base = artifact_dir(root, raw_artifact_dir, change_name)
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path, list[str]]:
+    base, artifact_warnings = workflow_artifact_dir(root, raw_artifact_dir, change_name)
     path = base / VALUE_GATE_FILE
     if not path.exists():
         report = json_report(
@@ -814,10 +873,11 @@ def load_gate(
             artifactDir=str(base),
             valueGateFile=str(path),
             errors=[f"missing {VALUE_GATE_FILE}; run init first"],
+            warnings=artifact_warnings,
         )
-        return None, report, base
+        return None, report, base, artifact_warnings
     try:
-        return read_json(path), None, base
+        return read_json(path), None, base, artifact_warnings
     except Exception as err:  # noqa: BLE001
         report = json_report(
             command,
@@ -827,8 +887,9 @@ def load_gate(
             artifactDir=str(base),
             valueGateFile=str(path),
             errors=[str(err)],
+            warnings=artifact_warnings,
         )
-        return None, report, base
+        return None, report, base, artifact_warnings
 
 
 def acknowledgement_valid(payload: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -1351,7 +1412,6 @@ def cmd_init(args: argparse.Namespace) -> int:
         report = json_report("init", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
         dump(report)
         return EXIT_USAGE
-    base = artifact_dir(root, args.artifact_dir, positional_change_name(args))
     if change_name and not CHANGE_NAME_RE.fullmatch(change_name):
         errors.append("change name must match ^[a-z0-9][a-z0-9-]*$")
     if args.capability and not CHANGE_NAME_RE.fullmatch(args.capability):
@@ -1361,6 +1421,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         dump(report)
         return EXIT_USAGE
 
+    base, artifact_warnings = workflow_artifact_dir(root, args.artifact_dir, positional_change_name(args))
     base.mkdir(parents=True, exist_ok=True)
     gate_path = base / VALUE_GATE_FILE
     written: list[str] = []
@@ -1373,6 +1434,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             artifactDir=str(base),
             valueGateFile=str(gate_path),
             errors=[f"{VALUE_GATE_FILE} already exists; use --force to replace it"],
+            warnings=artifact_warnings,
         )
         dump(report)
         return EXIT_INVALID_ARTIFACT
@@ -1415,6 +1477,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             f"Run `{check_cmd}`.",
             f"Run `{gate_cmd}` before `{write_cmd}`.",
         ],
+        warnings=artifact_warnings,
     )
     write_json(base / STATUS_FILE, report)
     dump(report)
@@ -1429,7 +1492,7 @@ def cmd_phase(args: argparse.Namespace) -> int:
         report = json_report("phase", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
         dump(report)
         return EXIT_USAGE
-    payload, error_report, base = load_gate(root, args.artifact_dir, "phase", positional_change_name(args))
+    payload, error_report, base, artifact_warnings = load_gate(root, args.artifact_dir, "phase", positional_change_name(args))
     if error_report is not None:
         write_json(base / STATUS_FILE, error_report)
         dump(error_report)
@@ -1463,7 +1526,7 @@ def cmd_phase(args: argparse.Namespace) -> int:
     state["activePhase"] = active
     state["updatedAt"] = utc_now()
     write_json(base / WORKFLOW_STATE_FILE, state)
-    report = json_report(
+    report = add_report_warnings(json_report(
         "phase",
         "pass",
         "updated",
@@ -1472,7 +1535,7 @@ def cmd_phase(args: argparse.Namespace) -> int:
         workflowStateFile=str(base / WORKFLOW_STATE_FILE),
         activePhase=active,
         phaseStatus=status,
-    )
+    ), artifact_warnings)
     write_json(base / STATUS_FILE, report)
     dump(report)
     return EXIT_PASS
@@ -1486,13 +1549,14 @@ def cmd_check(args: argparse.Namespace) -> int:
         report = json_report("check", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
         dump(report)
         return EXIT_USAGE
-    payload, error_report, base = load_gate(root, args.artifact_dir, "check", positional_change_name(args))
+    payload, error_report, base, artifact_warnings = load_gate(root, args.artifact_dir, "check", positional_change_name(args))
     if error_report is not None:
         write_json(base / STATUS_FILE, error_report)
         dump(error_report)
         return int(error_report["exitCode"])
     assert payload is not None
     report, code = evaluate_gate(payload, "check", base)
+    add_report_warnings(report, artifact_warnings)
     write_json(base / STATUS_FILE, report)
     dump(report)
     return code
@@ -1506,12 +1570,11 @@ def cmd_gate(args: argparse.Namespace) -> int:
         report = json_report("gate", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
         dump(report)
         return EXIT_USAGE
-    base = artifact_dir(root, args.artifact_dir, positional_change_name(args))
     if not args.pre_spec:
         report = json_report("gate", "usage_error", "usage_error", EXIT_USAGE, errors=["gate requires --pre-spec"])
         dump(report)
         return EXIT_USAGE
-    payload, error_report, base = load_gate(root, args.artifact_dir, "gate", positional_change_name(args))
+    payload, error_report, base, artifact_warnings = load_gate(root, args.artifact_dir, "gate", positional_change_name(args))
     if error_report is not None:
         write_json(base / PRE_SPEC_GATE_FILE, error_report)
         dump(error_report)
@@ -1519,10 +1582,12 @@ def cmd_gate(args: argparse.Namespace) -> int:
     assert payload is not None
     ack_report, ack_code = apply_acknowledgement(payload, args, base / VALUE_GATE_FILE)
     if ack_report is not None:
+        add_report_warnings(ack_report, artifact_warnings)
         write_json(base / PRE_SPEC_GATE_FILE, ack_report)
         dump(ack_report)
         return int(ack_code or EXIT_USAGE)
     report, code = evaluate_gate(payload, "gate", base)
+    add_report_warnings(report, artifact_warnings)
     write_json(base / PRE_SPEC_GATE_FILE, report)
     write_json(base / STATUS_FILE, report)
     dump(report)
@@ -1537,7 +1602,7 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
         report = json_report("write-spec", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
         dump(report)
         return EXIT_USAGE
-    payload, error_report, base = load_gate(root, args.artifact_dir, "write-spec", positional_change_name(args))
+    payload, error_report, base, artifact_warnings = load_gate(root, args.artifact_dir, "write-spec", positional_change_name(args))
     if error_report is not None:
         write_json(base / WRITE_SPEC_STATUS_FILE, error_report)
         dump(error_report)
@@ -1545,11 +1610,13 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
     assert payload is not None
     ack_report, ack_code = apply_acknowledgement(payload, args, base / VALUE_GATE_FILE)
     if ack_report is not None:
+        add_report_warnings(ack_report, artifact_warnings)
         write_json(base / WRITE_SPEC_STATUS_FILE, ack_report)
         dump(ack_report)
         return int(ack_code or EXIT_USAGE)
 
     gate_report, gate_code = evaluate_gate(payload, "write-spec", base)
+    add_report_warnings(gate_report, artifact_warnings)
     if gate_code != EXIT_PASS:
         write_json(base / WRITE_SPEC_STATUS_FILE, gate_report)
         write_json(base / STATUS_FILE, gate_report)
@@ -1559,7 +1626,7 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
     try:
         result = write_spec_package(payload, root, args, workflow_base=base)
     except Exception as err:  # noqa: BLE001
-        report = json_report(
+        report = add_report_warnings(json_report(
             "write-spec",
             str(gate_report.get("status", "blocked")),
             "write_failed",
@@ -1567,7 +1634,7 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
             artifactDir=str(base),
             valueGateFile=str(base / VALUE_GATE_FILE),
             errors=[str(err)],
-        )
+        ), artifact_warnings)
         write_json(base / WRITE_SPEC_STATUS_FILE, report)
         dump(report)
         return EXIT_WRITE_FAILED
@@ -1602,8 +1669,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--project-root", default=argparse.SUPPRESS, help="target project root")
     common.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
 
-    init = subparsers.add_parser("init", parents=[common], help="create .writer-workflow artifacts")
-    init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .writer-workflow/changes/<change-name>/")
+    init = subparsers.add_parser("init", parents=[common], help="create .goal-spec artifacts")
+    init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .goal-spec/changes/<change-name>/")
     init.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     init.add_argument("--capability", help="kebab-case OpenSpec capability/spec name")
     init.add_argument("--goal", help="source user goal or intended outcome")
@@ -1611,19 +1678,19 @@ def build_parser() -> argparse.ArgumentParser:
     init.set_defaults(func=cmd_init)
 
     phase = subparsers.add_parser("phase", parents=[common], help="update or report phase-aware workflow state")
-    phase.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    phase.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .goal-spec/changes/<change-name>/")
     phase.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     phase.add_argument("--active", required=True, help="phase id to set as active")
     phase.add_argument("--status", choices=PHASE_STATUSES, default="active", help="status to assign to the active phase")
     phase.set_defaults(func=cmd_phase)
 
     check = subparsers.add_parser("check", parents=[common], help="validate workflow artifacts and report gate status")
-    check.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    check.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .goal-spec/changes/<change-name>/")
     check.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     check.set_defaults(func=cmd_check)
 
     gate = subparsers.add_parser("gate", parents=[common], help="enforce workflow gates")
-    gate.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    gate.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .goal-spec/changes/<change-name>/")
     gate.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     gate.add_argument("--pre-spec", action="store_true", help="enforce the value gate before OpenSpec writing")
     gate.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
@@ -1632,7 +1699,7 @@ def build_parser() -> argparse.ArgumentParser:
     gate.set_defaults(func=cmd_gate)
 
     write_spec = subparsers.add_parser("write-spec", parents=[common], help="write OpenSpec templates after the pre-spec gate passes")
-    write_spec.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    write_spec.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .goal-spec/changes/<change-name>/")
     write_spec.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     write_spec.add_argument("--changes-dir", default="openspec/changes", help="OpenSpec changes directory, relative to project root unless absolute")
     write_spec.add_argument("--force", action="store_true", help="overwrite helper-managed OpenSpec files")

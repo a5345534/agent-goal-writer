@@ -1,2 +1,4 @@
 .worktree/
+.goal-spec/
+.writer-workflow/
 openspec/

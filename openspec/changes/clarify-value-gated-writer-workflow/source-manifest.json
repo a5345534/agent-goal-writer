@@ -1,27 +1,27 @@
 {
   "schemaVersion": "1.0",
   "changeName": "clarify-value-gated-writer-workflow",
-  "generatedAt": "2026-06-14T12:24:00.746157+00:00",
+  "generatedAt": "2026-06-14T13:18:55.665295+00:00",
   "sources": [
     {
       "path": "proposal.md",
       "kind": "proposal",
-      "sha256": "47cd43acdc706993af625991508d8b2de6330a4405cb5949354e571bbc38162d"
+      "sha256": "d5a91876146b67e588d5c503c26eee455afe355c7083e75c0fc3281669725fd3"
     },
     {
       "path": "design.md",
       "kind": "design",
-      "sha256": "ae1b142eab3a4be30638df8d2e9ee2d1f8d57de9de0e5fe9214e7492897faba9"
+      "sha256": "e5b2b804122124f4561ba23c3a567b0579ac289f4f9fdc9f414b2293c6f910e2"
     },
     {
       "path": "tasks.md",
       "kind": "tasks",
-      "sha256": "dedd723b3b5606b0b43a9f6f99346398d4289b5662b9df006cfdcf19e6e9848a"
+      "sha256": "6592376595028f7998ea423cc44a466a5a0c109e5587cef563cfd0f90e766eb6"
     },
     {
       "path": "specs/goal-spec-workflow/spec.md",
       "kind": "spec-delta",
-      "sha256": "5332e319a39a37160f54e8d20fb268b007e8b0d9b914611333e628cd493b1e40"
+      "sha256": "70309c32ae573ca8794f7c52136d189d19e756a02382268c27a43f6c699d087c"
     }
   ]
 }

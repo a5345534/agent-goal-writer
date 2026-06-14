@@ -21,8 +21,8 @@ This change clarifies that the writer is a critical collaborator, not an order-t
 
 - Affected specs: `goal-spec-workflow`
 - Affected modules/repos: `goal-spec` skill instructions and bundled `scripts/` helpers
-- Affected APIs/events/data: New local CLI/helper contract and workspace-local per-change workflow artifacts under `.writer-workflow/changes/<change-name>/`
-- Migration/deployment impact: Existing OpenSpec helper scripts remain compatible; this adds a stricter pre-writing path rather than replacing scaffold/manifest/explainer helpers.
+- Affected APIs/events/data: New local CLI/helper contract and workspace-local per-change workflow artifacts under `.goal-spec/changes/<change-name>/`
+- Migration/deployment impact: Existing OpenSpec helper scripts remain compatible; legacy `.writer-workflow/changes/<change-name>/` state migrates to `.goal-spec/changes/<change-name>/` when no explicit artifact override is used.
 - User-visible impact: Users experience more constructive challenge before spec generation, especially for vague, high-cost, or low-evidence goals.
 
 ## Non-Goals

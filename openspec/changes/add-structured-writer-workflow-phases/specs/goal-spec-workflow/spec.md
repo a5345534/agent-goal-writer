@@ -8,26 +8,26 @@ This capability defines the pre-OpenSpec authoring workflow for `goal-spec`. It 
 
 ### Requirement: Phase-aware workflow state
 
-The workflow SHALL maintain a phase-aware state file at `.writer-workflow/changes/<change-name>/workflow-state.json` for each active change. The state SHALL include active phase, phase status, phase steps, loop guard counters, and update timestamp.
+The workflow SHALL maintain a phase-aware state file at `.goal-spec/changes/<change-name>/workflow-state.json` for each active change. The state SHALL include active phase, phase status, phase steps, loop guard counters, and update timestamp.
 
 #### Scenario: Initialization creates phase-aware state
 
 - **GIVEN** a change name and capability name
 - **WHEN** `scripts/goal-spec-workflow init <change-name> --capability <capability>` runs
-- **THEN** the workflow SHALL create `.writer-workflow/changes/<change-name>/workflow-state.json`
+- **THEN** the workflow SHALL create `.goal-spec/changes/<change-name>/workflow-state.json`
 - **AND** the state SHALL include phases for intake, value challenge, clarification, spec kernel, pre-spec gate, OpenSpec write, and validation
 - **AND** the state SHALL include loop guard defaults.
 
 #### Scenario: Existing value-gate workflows remain compatible
 
-- **GIVEN** `.writer-workflow/changes/<change-name>/value-gate.json` exists but `workflow-state.json` is missing
+- **GIVEN** `.goal-spec/changes/<change-name>/value-gate.json` exists but `workflow-state.json` is missing
 - **WHEN** `scripts/goal-spec-workflow check <change-name>` runs
 - **THEN** the workflow SHALL either synthesize compatible default phase state or report a migration warning
 - **AND** it SHALL NOT discard existing `value-gate.json` decisions.
 
 ### Requirement: Extract reflect recover pipeline
 
-The workflow SHALL provide a deterministic extract/reflect/recover pipeline for pre-spec user/source input. The pipeline SHALL write structured outputs under `.writer-workflow/changes/<change-name>/` and SHALL remain advisory unless the pre-spec gate marks a blocker.
+The workflow SHALL provide a deterministic extract/reflect/recover pipeline for pre-spec user/source input. The pipeline SHALL write structured outputs under `.goal-spec/changes/<change-name>/` and SHALL remain advisory unless the pre-spec gate marks a blocker.
 
 #### Scenario: Extraction records value-frame claims
 
@@ -52,7 +52,7 @@ The workflow SHALL provide a deterministic extract/reflect/recover pipeline for 
 
 ### Requirement: Claim graph preservation
 
-The workflow SHALL track load-bearing source claims in `.writer-workflow/changes/<change-name>/claim-graph.json`. The claim graph SHALL map each load-bearing claim to its preservation status and OpenSpec destination before closeout.
+The workflow SHALL track load-bearing source claims in `.goal-spec/changes/<change-name>/claim-graph.json`. The claim graph SHALL map each load-bearing claim to its preservation status and OpenSpec destination before closeout.
 
 #### Scenario: Load-bearing claim blocks pre-spec completion when unpreserved
 
@@ -89,7 +89,7 @@ The workflow helper SHOULD organize phase templates, gate checks, extractors, re
 
 #### Scenario: Independent changes do not leak workflow state
 
-- **GIVEN** two different change names have workflow directories under `.writer-workflow/changes/`
+- **GIVEN** two different change names have workflow directories under `.goal-spec/changes/`
 - **WHEN** checks, gates, or write-spec operations run for one change
 - **THEN** they SHALL use only that change's workflow state unless an explicit artifact directory override is provided.
 

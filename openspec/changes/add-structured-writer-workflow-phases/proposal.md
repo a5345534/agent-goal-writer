@@ -16,7 +16,7 @@ This change specifies how to evolve the writer workflow from a flat value gate i
 
 ## What Changes
 
-- Extend workspace-local `.writer-workflow/changes/<change-name>/` state with a phase-aware workflow model.
+- Extend workspace-local `.goal-spec/changes/<change-name>/` state with a phase-aware workflow model.
 - Add an extract/reflect/recover pipeline for goal intake and source material before OpenSpec writing.
 - Add a claim graph that links user/source claims to proposal/design/tasks/spec destinations.
 - Add clarification-loop and challenge-loop guardrails with deterministic limits and fallback recommendations.
@@ -27,7 +27,7 @@ This change specifies how to evolve the writer workflow from a flat value gate i
 
 - Affected specs: `goal-spec-workflow`
 - Affected modules/repos: `goal-spec` skill instructions, `scripts/goal-spec-workflow`, tests, README, and OpenSpec closeout artifacts
-- Affected APIs/events/data: workspace-local workflow JSON schema under `.writer-workflow/changes/<change-name>/`; no public API or event contract
+- Affected APIs/events/data: workspace-local workflow JSON schema under `.goal-spec/changes/<change-name>/`; no public API or event contract
 - Migration/deployment impact: Existing `value-gate.json` workflows remain readable; new fields are additive and should default safely.
 - User-visible impact: Users get more stable clarification sessions, fewer repeated questions, clearer value-challenge rationale, and better preservation of decisions into OpenSpec.
 
@@ -36,12 +36,12 @@ This change specifies how to evolve the writer workflow from a flat value gate i
 - Do not adopt Omnigent as a dependency.
 - Do not implement a full autonomous ReAct loop or tool-calling agent inside `goal-spec`.
 - Do not replace Pi/goal-planner model routing with an internal LLM router.
-- Do not make `.writer-workflow/` authoritative over OpenSpec markdown/spec files.
+- Do not make `.goal-spec/` authoritative over OpenSpec markdown/spec files.
 - Do not introduce plugin loading or checksum enforcement in this change; registry-style extension points are enough.
 
 ## Success Signal
 
-A non-trivial, ambiguous writer request can be resumed from `.writer-workflow/changes/<change-name>/workflow-state.json`; the helper can show active phase, completed steps, repeated-question/challenge counts, extracted claims, reflection/recovery recommendations, and claim preservation status. `write-spec` remains blocked until the pre-spec gate passes or acknowledged assumptions are recorded, and resulting OpenSpec files include the load-bearing value debate and claim graph outputs.
+A non-trivial, ambiguous writer request can be resumed from `.goal-spec/changes/<change-name>/workflow-state.json`; the helper can show active phase, completed steps, repeated-question/challenge counts, extracted claims, reflection/recovery recommendations, and claim preservation status. `write-spec` remains blocked until the pre-spec gate passes or acknowledged assumptions are recorded, and resulting OpenSpec files include the load-bearing value debate and claim graph outputs.
 
 ## Assumptions
 

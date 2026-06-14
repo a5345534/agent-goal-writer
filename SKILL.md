@@ -70,7 +70,7 @@ maps them into OpenSpec authoring:
   benefit, success evidence, no-build alternatives, and the smallest useful
   scope before creating an OpenSpec package.
 - **Phase-aware workflow state**: keep workspace-local
-  `.writer-workflow/changes/<change-name>/workflow-state.json` progress,
+  `.goal-spec/changes/<change-name>/workflow-state.json` progress,
   extract/reflect/recover reports, claim graph preservation evidence, and loop
   guards so long clarification sessions can resume without becoming
   authoritative OpenSpec sources.
@@ -229,11 +229,12 @@ name:
 <skill-dir>/scripts/check-change-explainer.sh <change-name> --project-root <project-root> --require-decision-review
 ```
 
-The workflow helper creates workspace-local `.writer-workflow/changes/<change-name>/` artifacts, emits JSON status, and
+The workflow helper creates workspace-local `.goal-spec/changes/<change-name>/` artifacts, emits JSON status, and
 enforces only `blocked`, `pass`, and `proceed_with_assumptions` pre-spec states.
 The artifact set includes `value-gate.json`, `workflow-state.json`,
 `extracted-claims.json`, `reflection-report.json`, `recovery-actions.json`,
 `claim-graph.json`, `pre-spec-gate.json`, and `write-spec-status.json`.
+`.goal-spec/` is workspace-local operational state, not an OpenSpec source of truth, and should normally stay out of git. If an older workspace still has `.writer-workflow/changes/<change-name>/`, the helper automatically migrates it to `.goal-spec/changes/<change-name>/` when no explicit `--artifact-dir` override is used and includes a warning in the JSON report.
 `proceed_with_assumptions` requires an explicit acknowledgement before
 `gate --pre-spec` or `write-spec` can return success.
 
@@ -507,7 +508,7 @@ Capability/spec name rules:
 
 ### 9. Scaffold the OpenSpec change
 
-Use the bundled workflow helper first to materialize workspace-local `.writer-workflow/changes/<change-name>/` state, record
+Use the bundled workflow helper first to materialize workspace-local `.goal-spec/changes/<change-name>/` state, record
 and check the pre-spec gate, and only then write the starter OpenSpec package:
 
 ```bash

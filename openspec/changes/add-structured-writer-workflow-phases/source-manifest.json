@@ -1,27 +1,27 @@
 {
   "schemaVersion": "1.0",
   "changeName": "add-structured-writer-workflow-phases",
-  "generatedAt": "2026-06-14T12:24:00.801935+00:00",
+  "generatedAt": "2026-06-14T13:18:55.711460+00:00",
   "sources": [
     {
       "path": "proposal.md",
       "kind": "proposal",
-      "sha256": "1f230561755a31b837411ff513f34c9f0f27331daa1d4f1f1c3e8ef87879f469"
+      "sha256": "4ee927d72a0169b5c235b770abb1852de86536352f562bf91c0e06a4b826988e"
     },
     {
       "path": "design.md",
       "kind": "design",
-      "sha256": "34227173e93a0d4dcb6f34cac02d45ef9f2440e79083ca4d867de0171ae46973"
+      "sha256": "e865c5472f34ee34cdd70cb0eb9b33de459dbf5cb8dba1cdf0c37fb85926176d"
     },
     {
       "path": "tasks.md",
       "kind": "tasks",
-      "sha256": "5bc5eb23486cbb538c9198dbc35b02b57cab864e3f0b639d9fa2b9b4948eb284"
+      "sha256": "a6d9583e442f75cbaeddb9598fbc7efb22e60939d1ec2b3561ed89d363125f84"
     },
     {
       "path": "specs/goal-spec-workflow/spec.md",
       "kind": "spec-delta",
-      "sha256": "947d2b771d5880080a8eef63d16998920ab17d4403b9dca07091def83a176e5a"
+      "sha256": "59aab757606b12ab954bd2eec4f0736bb05fe0af3b1ba057694cea2686e38536"
     }
   ]
 }

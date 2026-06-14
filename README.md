@@ -122,7 +122,7 @@ scripts/openspec-validate-explainer <change-name> --project-root <target-root> -
 scripts/openspec-archive-preflight <change-name> --project-root <target-root> --require-decision-review
 ```
 
-The workflow helper creates workspace-local `.writer-workflow/changes/<change-name>/` artifacts, including:
+The workflow helper creates workspace-local `.goal-spec/changes/<change-name>/` artifacts, including:
 
 - `value-gate.json`
 - `workflow-state.json`
@@ -131,6 +131,8 @@ The workflow helper creates workspace-local `.writer-workflow/changes/<change-na
 - `recovery-actions.json`
 - `claim-graph.json`
 - `pre-spec-gate.json` / `write-spec-status.json`
+
+`.goal-spec/` is workspace-local operational state, not an OpenSpec source of truth, and should normally stay out of git. If an older workspace still has `.writer-workflow/changes/<change-name>/`, the helper automatically migrates it to `.goal-spec/changes/<change-name>/` when no explicit `--artifact-dir` override is used and includes a warning in the JSON report.
 
 It emits JSON status for `blocked`, `pass`, and `proceed_with_assumptions`. Exit codes are stable:
 `0` pass, `20` blocked, `30` acknowledgement required, `40` invalid artifact,

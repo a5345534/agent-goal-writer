@@ -53,7 +53,7 @@ A workflow script can make this stable by forcing the conversation to leave stag
 | Concern | Relevance | Design response |
 | --- | --- | --- |
 | Over-accommodation | The writer may otherwise turn user preference into authoritative scope. | Add value challenge and disagreement protocol before spec writing. |
-| Workflow stability | Prompt-only stages can be skipped by accident. | Add workspace-local `.writer-workflow/changes/<change-name>/` artifacts and a gate command with exit codes. |
+| Workflow stability | Prompt-only stages can be skipped by accident. | Add workspace-local `.goal-spec/changes/<change-name>/` artifacts and a gate command with exit codes. |
 | False certainty | A script cannot truly prove value. | Separate deterministic completeness checks from agent judgment; record assumptions and risks. |
 | Momentum loss | Too much challenge can become obstruction. | Allow fast path and `proceed_with_assumptions` after explicit user acknowledgement. |
 | OpenSpec fidelity | Pre-writing debate must affect final specs. | Require value rationale, alternatives, assumptions, and risks to land in proposal/design/tasks/spec where relevant. |
@@ -79,7 +79,7 @@ INTAKE
 The helper script manages workspace-local workflow artifacts under:
 
 ```text
-.writer-workflow/changes/<change-name>/
+.goal-spec/changes/<change-name>/
 ├── README.md
 ├── value-gate.json
 ├── spec-kernel.md
@@ -193,7 +193,7 @@ scripts/goal-spec-workflow gate <change-name> --pre-spec
 scripts/goal-spec-workflow write-spec <change-name>
 ```
 
-The positional `<change-name>` selects `.writer-workflow/changes/<change-name>/`. `write-spec` must fail unless the latest pre-spec gate status is `pass` or acknowledged `proceed_with_assumptions`.
+The positional `<change-name>` selects `.goal-spec/changes/<change-name>/`. `write-spec` must fail unless the latest pre-spec gate status is `pass` or acknowledged `proceed_with_assumptions`.
 
 **Rationale**
 This makes the workflow stable while preserving the writer's role as a critical collaborator.
@@ -255,7 +255,7 @@ New local workflow artifact contracts:
 
 ### Execution Flow
 
-1. `init <change-name>` creates `.writer-workflow/changes/<change-name>/` artifacts and an initial value-gate state.
+1. `init <change-name>` creates `.goal-spec/changes/<change-name>/` artifacts and an initial value-gate state.
 2. The agent conducts intake and records raw goal, context, missing inputs, and stakes in `value-gate.json` and/or `spec-kernel.md`.
 3. The agent conducts value challenge and records problem/value evidence, no-build option, smaller-scope option, and disagreement notes.
 4. The agent clarifies scope, constraints, non-goals, affected surfaces, and verification expectations.
@@ -277,7 +277,8 @@ New local workflow artifact contracts:
 
 - Add the workflow helper without removing existing scripts.
 - Update `SKILL.md` so new OpenSpec authoring runs the value-gated workflow before step 6 scaffolding.
-- Existing change packages remain valid; they simply lack workspace-local `.writer-workflow/changes/<change-name>/` artifacts unless updated.
+- Existing change packages remain valid; they simply lack workspace-local `.goal-spec/changes/<change-name>/` artifacts unless updated.
+- Legacy `.writer-workflow/changes/<change-name>/` state is migrated automatically to `.goal-spec/changes/<change-name>/` when the helper is invoked without an explicit `--artifact-dir`, and the JSON report includes a migration warning.
 - For small or already-clear requests, the writer may use a fast path but must still satisfy the pre-spec gate or explicitly record assumptions.
 
 ## Risks
@@ -292,7 +293,7 @@ New local workflow artifact contracts:
 
 ## Verification Plan
 
-- Run `scripts/goal-spec-workflow init <change-name>` and confirm all expected `.writer-workflow/changes/<change-name>/` artifacts are created.
+- Run `scripts/goal-spec-workflow init <change-name>` and confirm all expected `.goal-spec/changes/<change-name>/` artifacts are created.
 - Run `gate --pre-spec` against incomplete artifacts and confirm a non-zero exit with `blocked` status.
 - Run `gate --pre-spec` against complete artifacts and confirm `pass` status.
 - Run `gate --pre-spec` with unresolved acknowledged risks and confirm `proceed_with_assumptions` status only when acknowledgement is recorded.
@@ -307,4 +308,4 @@ New local workflow artifact contracts:
 - User constraint: writer should not over-accommodate users → captured in Value Challenge Gate and disagreement protocol.
 - User requirement: debate whether the target is actually valuable → captured in D2 and spec requirements for no-build/smaller-scope alternatives.
 - User request: design the flow as a workflow script with stable stages and a quality checkpoint before writing specs → captured in D1, D3, D4, artifact contracts, and tasks.
-- Existing skill rule: OpenSpec markdown/spec files remain source of truth → preserved by keeping `.writer-workflow/changes/<change-name>/` as workspace-local pre-writing evidence and requiring value outputs to land in proposal/design/tasks/spec.
+- Existing skill rule: OpenSpec markdown/spec files remain source of truth → preserved by keeping `.goal-spec/changes/<change-name>/` as workspace-local pre-writing evidence and requiring value outputs to land in proposal/design/tasks/spec.

@@ -44,15 +44,15 @@ Before a goal is treated as ready for spec-kernel finalization, the writer SHALL
 
 ### Requirement: Workspace-level workflow artifacts
 
-The workflow SHALL maintain workspace-local artifacts for value challenge, spec kernel notes, gate reports, and write-spec status before OpenSpec writing. These artifacts SHALL be stored under `.writer-workflow/changes/<change-name>/` for the active change and SHALL NOT be treated as authoritative OpenSpec sources.
+The workflow SHALL maintain workspace-local artifacts for value challenge, spec kernel notes, gate reports, and write-spec status before OpenSpec writing. These artifacts SHALL be stored under `.goal-spec/changes/<change-name>/` for the active change and SHALL NOT be treated as authoritative OpenSpec sources.
 
 #### Scenario: Workflow initialization creates artifacts
 
 - **GIVEN** a change name and capability name
 - **WHEN** `scripts/goal-spec-workflow init <change-name> --capability <capability>` runs
-- **THEN** the workflow SHALL create `.writer-workflow/changes/<change-name>/value-gate.json`
-- **AND** it SHALL create `.writer-workflow/changes/<change-name>/spec-kernel.md`
-- **AND** it SHALL create `.writer-workflow/changes/<change-name>/status.json`.
+- **THEN** the workflow SHALL create `.goal-spec/changes/<change-name>/value-gate.json`
+- **AND** it SHALL create `.goal-spec/changes/<change-name>/spec-kernel.md`
+- **AND** it SHALL create `.goal-spec/changes/<change-name>/status.json`.
 
 #### Scenario: Artifact checks report missing evidence
 
@@ -61,9 +61,18 @@ The workflow SHALL maintain workspace-local artifacts for value challenge, spec 
 - **THEN** the command SHALL report the missing fields
 - **AND** it SHALL return a non-zero exit code.
 
+#### Scenario: Legacy workflow root migrates to goal-spec root
+
+- **GIVEN** `.writer-workflow/changes/<change-name>/value-gate.json` exists
+- **AND** `.goal-spec/changes/<change-name>/value-gate.json` does not exist
+- **WHEN** `scripts/goal-spec-workflow check <change-name>` runs without an explicit `--artifact-dir`
+- **THEN** the workflow SHALL migrate the legacy directory to `.goal-spec/changes/<change-name>/`
+- **AND** the JSON report SHALL include a warning that a legacy artifact directory was migrated
+- **AND** commands that specify `--artifact-dir` SHALL use that explicit directory without automatic migration.
+
 ### Requirement: Pre-spec quality gate
 
-The workflow SHALL run a pre-spec quality gate before OpenSpec writing. The gate SHALL produce `.writer-workflow/changes/<change-name>/pre-spec-gate.json` with status `blocked`, `pass`, or `proceed_with_assumptions`. OpenSpec writing SHALL NOT start when the latest gate status is `blocked` or missing.
+The workflow SHALL run a pre-spec quality gate before OpenSpec writing. The gate SHALL produce `.goal-spec/changes/<change-name>/pre-spec-gate.json` with status `blocked`, `pass`, or `proceed_with_assumptions`. OpenSpec writing SHALL NOT start when the latest gate status is `blocked` or missing.
 
 #### Scenario: Gate blocks untestable goals
 

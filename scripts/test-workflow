@@ -446,15 +446,15 @@ test_init_creates_artifacts() {
     assert_json_field "$out" "status" "blocked" "status" || ok=1
     assert_json_field "$out" "result" "initialized" "result" || ok=1
 
-    [[ -f "$tmp/.writer-workflow/value-gate.json" ]] || { printf "\n    ${RED}missing value-gate.json${NC}\n"; ok=1; }
-    [[ -f "$tmp/.writer-workflow/spec-kernel.md" ]] || { printf "\n    ${RED}missing spec-kernel.md${NC}\n"; ok=1; }
-    [[ -f "$tmp/.writer-workflow/README.md" ]] || { printf "\n    ${RED}missing README.md${NC}\n"; ok=1; }
-    [[ -f "$tmp/.writer-workflow/status.json" ]] || { printf "\n    ${RED}missing status.json${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/value-gate.json" ]] || { printf "\n    ${RED}missing value-gate.json${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/spec-kernel.md" ]] || { printf "\n    ${RED}missing spec-kernel.md${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/README.md" ]] || { printf "\n    ${RED}missing README.md${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/status.json" ]] || { printf "\n    ${RED}missing status.json${NC}\n"; ok=1; }
 
     # Validate value-gate.json schema
     python3 -c "
 import json
-with open('$tmp/.writer-workflow/value-gate.json') as f:
+with open('$tmp/.goal-spec/value-gate.json') as f:
     d = json.load(f)
 assert d['schemaVersion'] == '1.0'
 assert d['status'] == 'blocked'
@@ -473,7 +473,7 @@ print('OK')
 test_positional_change_uses_workspace_changes_dir() {
     local tmp
     tmp=$(mktemp -d)
-    local gate_dir="$tmp/.writer-workflow/changes/positional-test"
+    local gate_dir="$tmp/.goal-spec/changes/positional-test"
     local out rc
     set +e
     out=$("$WORKFLOW" init positional-test --project-root "$tmp" --capability "positional-cap" --goal "Positional test." 2>&1)
@@ -515,10 +515,36 @@ test_positional_change_uses_workspace_changes_dir() {
 }
 
 
+test_legacy_writer_workflow_migrates_to_goal_spec() {
+    local tmp
+    tmp=$(mktemp -d)
+    local legacy_dir="$tmp/.writer-workflow/changes/legacy-migrate"
+    local gate_dir="$tmp/.goal-spec/changes/legacy-migrate"
+    mkdir -p "$legacy_dir"
+    filled_gate_pass "$tmp" "legacy-migrate" "legacy-cap" > "$legacy_dir/value-gate.json"
+
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check legacy-migrate --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "legacy migration check exit" || ok=1
+    assert_json_field "$out" "status" "pass" "legacy migration status" || ok=1
+    [[ -f "$gate_dir/value-gate.json" ]] || { printf "\n    ${RED}missing migrated value-gate.json${NC}\n"; ok=1; }
+    [[ ! -e "$legacy_dir" ]] || { printf "\n    ${RED}legacy directory still exists${NC}\n"; ok=1; }
+    echo "$out" | grep -q "migrated legacy artifact directory" \
+        || { printf "\n    ${RED}migration warning missing${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+
 test_structured_artifacts_created() {
     local tmp
     tmp=$(mktemp -d)
-    local dir="$tmp/.writer-workflow/changes/structured-test"
+    local dir="$tmp/.goal-spec/changes/structured-test"
     "$WORKFLOW" init structured-test --project-root "$tmp" --capability "structured-cap" --goal "Structured test." > /dev/null 2>&1
     local ok=0
     [[ -f "$dir/workflow-state.json" ]] || { printf "\n    ${RED}missing workflow-state.json${NC}\n"; ok=1; }
@@ -547,7 +573,7 @@ assert claims['claims'] == []
 test_phase_command_updates_active_phase() {
     local tmp
     tmp=$(mktemp -d)
-    local dir="$tmp/.writer-workflow/changes/phase-test"
+    local dir="$tmp/.goal-spec/changes/phase-test"
     "$WORKFLOW" init phase-test --project-root "$tmp" --capability "phase-cap" --goal "Phase test." > /dev/null 2>&1
     local out rc
     set +e
@@ -574,8 +600,8 @@ assert phase['status']=='active'
 test_independent_change_state() {
     local tmp
     tmp=$(mktemp -d)
-    local dir_a="$tmp/.writer-workflow/changes/change-a"
-    local dir_b="$tmp/.writer-workflow/changes/change-b"
+    local dir_a="$tmp/.goal-spec/changes/change-a"
+    local dir_b="$tmp/.goal-spec/changes/change-b"
     "$WORKFLOW" init change-a --project-root "$tmp" --capability "cap-a" --goal "A." > /dev/null 2>&1
     "$WORKFLOW" init change-b --project-root "$tmp" --capability "cap-b" --goal "B." > /dev/null 2>&1
     filled_gate_pass "$tmp" "change-a" "cap-a" > "$dir_a/value-gate.json"
@@ -600,7 +626,7 @@ test_independent_change_state() {
 test_claim_graph_blocks_gate() {
     local tmp
     tmp=$(mktemp -d)
-    local dir="$tmp/.writer-workflow/changes/claim-block"
+    local dir="$tmp/.goal-spec/changes/claim-block"
     "$WORKFLOW" init claim-block --project-root "$tmp" --capability "claim-cap" --goal "Claim block." > /dev/null 2>&1
     filled_gate_pass "$tmp" "claim-block" "claim-cap" > "$dir/value-gate.json"
     python3 -c "
@@ -633,7 +659,7 @@ claim_graph={
 test_loop_guard_blocks_gate() {
     local tmp
     tmp=$(mktemp -d)
-    local dir="$tmp/.writer-workflow/changes/loop-block"
+    local dir="$tmp/.goal-spec/changes/loop-block"
     "$WORKFLOW" init loop-block --project-root "$tmp" --capability "loop-cap" --goal "Loop block." > /dev/null 2>&1
     filled_gate_pass "$tmp" "loop-block" "loop-cap" > "$dir/value-gate.json"
     python3 -c "
@@ -690,7 +716,7 @@ test_init_force_overwrites() {
     # Verify changeName was updated
     python3 -c "
 import json
-with open('$tmp/.writer-workflow/value-gate.json') as f:
+with open('$tmp/.goal-spec/value-gate.json') as f:
     d = json.load(f)
 assert d['changeName'] == 'force-new'
 print('OK')
@@ -749,7 +775,7 @@ test_check_blocked_missing_success_signal() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    gapped_success_signal "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    gapped_success_signal "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -770,7 +796,7 @@ test_check_blocked_missing_no_build() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    gapped_no_build "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    gapped_no_build "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -788,7 +814,7 @@ test_check_blocked_non_goal() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    gapped_non_goal "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    gapped_non_goal "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -806,7 +832,7 @@ test_check_blocked_missing_rationale() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    gapped_rationale "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    gapped_rationale "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -824,7 +850,7 @@ test_check_blocked_unresolved_questions() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    filled_gate_blocked "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_blocked "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -844,7 +870,7 @@ test_check_pass_complete() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "complete-test" --capability "cap" --goal "Complete." > /dev/null 2>&1
-    filled_gate_pass "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_pass "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -870,7 +896,7 @@ test_check_proceed_no_ack() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "proceed-test" --capability "cap" > /dev/null 2>&1
-    filled_gate_proceed "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_proceed "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
@@ -889,7 +915,7 @@ test_gate_proceed_with_ack() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "ack-test" --capability "cap" > /dev/null 2>&1
-    filled_gate_proceed "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_proceed "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" \
@@ -903,7 +929,7 @@ test_gate_proceed_with_ack() {
     # Verify the value-gate.json was updated with acknowledgement
     python3 -c "
 import json
-with open('$tmp/.writer-workflow/value-gate.json') as f:
+with open('$tmp/.goal-spec/value-gate.json') as f:
     d = json.load(f)
 assert d['acknowledgement']['accepted'] == True
 assert d['acknowledgement']['rationale'] == 'Accepted for testing.'
@@ -917,7 +943,7 @@ test_gate_proceed_no_ack_flag() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "no-ack-flag" --capability "cap" > /dev/null 2>&1
-    filled_gate_proceed "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_proceed "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" 2>&1)
@@ -934,7 +960,7 @@ test_gate_blocked() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    filled_gate_blocked "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_blocked "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" 2>&1)
@@ -945,7 +971,7 @@ test_gate_blocked() {
     assert_json_field "$out" "exitCodeName" "blocked" "exitCodeName" || ok=1
     assert_json_field "$out" "result" "blocked" "result" || ok=1
     # Verify pre-spec-gate.json was written
-    [[ -f "$tmp/.writer-workflow/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing pre-spec-gate.json${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing pre-spec-gate.json${NC}\n"; ok=1; }
     rm -rf "$tmp"
     return $ok
 }
@@ -954,7 +980,7 @@ test_gate_pass() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "gate-pass" --capability "cap" > /dev/null 2>&1
-    filled_gate_pass "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_pass "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" 2>&1)
@@ -965,8 +991,8 @@ test_gate_pass() {
     assert_json_field "$out" "exitCodeName" "pass" "exitCodeName" || ok=1
     assert_json_field "$out" "allowed" "True" "allowed" || ok=1
     # Verify pre-spec-gate.json and status.json were written
-    [[ -f "$tmp/.writer-workflow/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing pre-spec-gate.json${NC}\n"; ok=1; }
-    [[ -f "$tmp/.writer-workflow/status.json" ]] || { printf "\n    ${RED}missing status.json${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing pre-spec-gate.json${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/status.json" ]] || { printf "\n    ${RED}missing status.json${NC}\n"; ok=1; }
     rm -rf "$tmp"
     return $ok
 }
@@ -975,7 +1001,7 @@ test_write_spec_before_gate() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" > /dev/null 2>&1
-    filled_gate_blocked "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_blocked "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
@@ -985,7 +1011,7 @@ test_write_spec_before_gate() {
     assert_exit 20 "$rc" "write-spec before gate exit" || ok=1
     assert_json_field "$out" "exitCodeName" "blocked" "exitCodeName" || ok=1
     # Verify write-spec-status.json was written
-    [[ -f "$tmp/.writer-workflow/write-spec-status.json" ]] || { printf "\n    ${RED}missing write-spec-status.json${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/write-spec-status.json" ]] || { printf "\n    ${RED}missing write-spec-status.json${NC}\n"; ok=1; }
     # Ensure no OpenSpec artifacts were written
     [[ ! -d "$tmp/openspec" ]] || { printf "\n    ${RED}unexpected OpenSpec dir${NC}\n"; ok=1; }
     rm -rf "$tmp"
@@ -996,7 +1022,7 @@ test_write_spec_before_gate_proceed_no_ack() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "ws-no-ack" --capability "cap" > /dev/null 2>&1
-    filled_gate_proceed "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_proceed "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
@@ -1014,7 +1040,7 @@ test_write_spec_after_pass() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "ws-pass" --capability "ws-cap" > /dev/null 2>&1
-    filled_gate_pass "$tmp" "ws-pass" "ws-cap" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_pass "$tmp" "ws-pass" "ws-cap" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
@@ -1042,7 +1068,7 @@ test_write_spec_proceed_with_ack() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "ws-ack" --capability "ws-ack-cap" > /dev/null 2>&1
-    filled_gate_proceed "$tmp" "ws-ack" "ws-ack-cap" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_proceed "$tmp" "ws-ack" "ws-ack-cap" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" write-spec --project-root "$tmp" \
@@ -1078,7 +1104,7 @@ test_ack_without_rationale() {
     local tmp
     tmp=$(mktemp -d)
     "$WORKFLOW" init --project-root "$tmp" --change-name "bad-ack" --capability "cap" > /dev/null 2>&1
-    filled_gate_proceed "$tmp" > "$tmp/.writer-workflow/value-gate.json"
+    filled_gate_proceed "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
     out=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" \
@@ -1103,6 +1129,7 @@ echo ""
 echo "--- init ---"
 run_test "creates artifacts"            test_init_creates_artifacts
 run_test "positional per-change artifacts" test_positional_change_uses_workspace_changes_dir
+run_test "legacy .writer-workflow migrates" test_legacy_writer_workflow_migrates_to_goal_spec
 run_test "structured artifacts created" test_structured_artifacts_created
 run_test "phase command updates active phase" test_phase_command_updates_active_phase
 run_test "independent change state"     test_independent_change_state
