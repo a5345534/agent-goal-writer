@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test runner for agent-goal-writer-workflow
+# Test runner for goal-spec-workflow
 #
 # Covers:
 #   - init artifact creation
@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-WORKFLOW="$SCRIPT_DIR/agent-goal-writer-workflow"
+WORKFLOW="$SCRIPT_DIR/goal-spec-workflow"
 
 PASS=0
 FAIL=0
@@ -104,7 +104,7 @@ gate = {
     'createdAt': now,
     'updatedAt': now,
     'valueFrame': {
-        'beneficiary': 'developers using agent-goal-writer',
+        'beneficiary': 'developers using goal-spec',
         'problemOrOpportunity': 'The workflow helper needs deterministic test coverage.',
         'whyNow': 'Tests are required before the gate can be trusted in production.',
         'successSignal': 'All test scenarios pass with expected exit codes and JSON outputs.',
@@ -1095,7 +1095,7 @@ test_ack_without_rationale() {
 
 echo ""
 echo "=============================================="
-echo " agent-goal-writer-workflow test suite"
+echo " goal-spec-workflow test suite"
 echo "=============================================="
 echo ""
 

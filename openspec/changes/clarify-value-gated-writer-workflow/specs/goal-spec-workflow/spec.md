@@ -1,8 +1,8 @@
-# agent-goal-writer-workflow Specification
+# goal-spec-workflow Specification
 
 ## Purpose
 
-This capability defines the pre-OpenSpec authoring workflow for `agent-goal-writer`. It ensures the writer clarifies ambiguity, challenges whether a goal is worth doing, records assumptions and alternatives, and only writes OpenSpec artifacts after a pre-spec quality gate passes or the user explicitly chooses to proceed with acknowledged assumptions.
+This capability defines the pre-OpenSpec authoring workflow for `goal-spec`. It ensures the writer clarifies ambiguity, challenges whether a goal is worth doing, records assumptions and alternatives, and only writes OpenSpec artifacts after a pre-spec quality gate passes or the user explicitly chooses to proceed with acknowledged assumptions.
 
 ## Requirements
 
@@ -49,7 +49,7 @@ The workflow SHALL maintain workspace-local artifacts for value challenge, spec 
 #### Scenario: Workflow initialization creates artifacts
 
 - **GIVEN** a change name and capability name
-- **WHEN** `scripts/agent-goal-writer-workflow init <change-name> --capability <capability>` runs
+- **WHEN** `scripts/goal-spec-workflow init <change-name> --capability <capability>` runs
 - **THEN** the workflow SHALL create `.writer-workflow/changes/<change-name>/value-gate.json`
 - **AND** it SHALL create `.writer-workflow/changes/<change-name>/spec-kernel.md`
 - **AND** it SHALL create `.writer-workflow/changes/<change-name>/status.json`.
@@ -57,7 +57,7 @@ The workflow SHALL maintain workspace-local artifacts for value challenge, spec 
 #### Scenario: Artifact checks report missing evidence
 
 - **GIVEN** the value-gate artifact is missing required pre-spec fields
-- **WHEN** `scripts/agent-goal-writer-workflow check <change-name>` runs
+- **WHEN** `scripts/goal-spec-workflow check <change-name>` runs
 - **THEN** the command SHALL report the missing fields
 - **AND** it SHALL return a non-zero exit code.
 
@@ -68,7 +68,7 @@ The workflow SHALL run a pre-spec quality gate before OpenSpec writing. The gate
 #### Scenario: Gate blocks untestable goals
 
 - **GIVEN** the spec kernel lacks a testable success signal
-- **WHEN** `scripts/agent-goal-writer-workflow gate <change-name> --pre-spec` runs
+- **WHEN** `scripts/goal-spec-workflow gate <change-name> --pre-spec` runs
 - **THEN** `pre-spec-gate.json` SHALL report status `blocked`
 - **AND** the blockers SHALL include the missing or untestable success signal.
 

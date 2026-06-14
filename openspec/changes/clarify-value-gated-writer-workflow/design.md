@@ -2,7 +2,7 @@
 
 ## Context
 
-The current `agent-goal-writer` skill already requires discovery, spec-kernel preservation, OpenSpec package writing, source-manifest refresh, explainer generation, and archive-readiness checks. The missing clarity is not the final OpenSpec format; it is the pre-writing discipline.
+The current `goal-spec` skill already requires discovery, spec-kernel preservation, OpenSpec package writing, source-manifest refresh, explainer generation, and archive-readiness checks. The missing clarity is not the final OpenSpec format; it is the pre-writing discipline.
 
 The desired writer behavior is:
 
@@ -187,10 +187,10 @@ The agent owns dialogue, disagreement, synthesis, and judgment. The script owns 
 Implemented CLI:
 
 ```bash
-scripts/agent-goal-writer-workflow init <change-name> --capability <capability> --goal "<goal>"
-scripts/agent-goal-writer-workflow check <change-name>
-scripts/agent-goal-writer-workflow gate <change-name> --pre-spec
-scripts/agent-goal-writer-workflow write-spec <change-name>
+scripts/goal-spec-workflow init <change-name> --capability <capability> --goal "<goal>"
+scripts/goal-spec-workflow check <change-name>
+scripts/goal-spec-workflow gate <change-name> --pre-spec
+scripts/goal-spec-workflow write-spec <change-name>
 ```
 
 The positional `<change-name>` selects `.writer-workflow/changes/<change-name>/`. `write-spec` must fail unless the latest pre-spec gate status is `pass` or acknowledged `proceed_with_assumptions`.
@@ -215,7 +215,7 @@ New local workflow artifact contracts:
   "schemaVersion": "1.0",
   "status": "blocked",
   "changeName": "clarify-value-gated-writer-workflow",
-  "capability": "agent-goal-writer-workflow",
+  "capability": "goal-spec-workflow",
   "goal": "...",
   "valueFrame": {
     "beneficiary": "...",
@@ -269,7 +269,7 @@ New local workflow artifact contracts:
 ### Module Boundaries
 
 - `SKILL.md` owns the prompt-level behavior and must describe the critical-collaborator workflow.
-- `scripts/agent-goal-writer-workflow` owns workspace-local workflow artifact creation, gate checks, and starter OpenSpec package writing after the gate passes.
+- `scripts/goal-spec-workflow` owns workspace-local workflow artifact creation, gate checks, and starter OpenSpec package writing after the gate passes.
 - Existing `scripts/openspec-*` helpers continue to own manifest, explainer, and archive checks and remain available for compatibility.
 - `change-explainer.html` remains a companion view and must not become the authoritative workflow source.
 
@@ -292,7 +292,7 @@ New local workflow artifact contracts:
 
 ## Verification Plan
 
-- Run `scripts/agent-goal-writer-workflow init <change-name>` and confirm all expected `.writer-workflow/changes/<change-name>/` artifacts are created.
+- Run `scripts/goal-spec-workflow init <change-name>` and confirm all expected `.writer-workflow/changes/<change-name>/` artifacts are created.
 - Run `gate --pre-spec` against incomplete artifacts and confirm a non-zero exit with `blocked` status.
 - Run `gate --pre-spec` against complete artifacts and confirm `pass` status.
 - Run `gate --pre-spec` with unresolved acknowledged risks and confirm `proceed_with_assumptions` status only when acknowledgement is recorded.

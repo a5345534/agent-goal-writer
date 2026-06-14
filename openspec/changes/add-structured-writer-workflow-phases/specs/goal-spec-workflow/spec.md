@@ -1,8 +1,8 @@
-# agent-goal-writer-workflow Specification
+# goal-spec-workflow Specification
 
 ## Purpose
 
-This capability defines the pre-OpenSpec authoring workflow for `agent-goal-writer`. It ensures workspace-local workflow state can track value challenge phases, structured claims, recovery recommendations, loop guards, and load-bearing preservation before the writer creates governed OpenSpec artifacts.
+This capability defines the pre-OpenSpec authoring workflow for `goal-spec`. It ensures workspace-local workflow state can track value challenge phases, structured claims, recovery recommendations, loop guards, and load-bearing preservation before the writer creates governed OpenSpec artifacts.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ The workflow SHALL maintain a phase-aware state file at `.writer-workflow/change
 #### Scenario: Initialization creates phase-aware state
 
 - **GIVEN** a change name and capability name
-- **WHEN** `scripts/agent-goal-writer-workflow init <change-name> --capability <capability>` runs
+- **WHEN** `scripts/goal-spec-workflow init <change-name> --capability <capability>` runs
 - **THEN** the workflow SHALL create `.writer-workflow/changes/<change-name>/workflow-state.json`
 - **AND** the state SHALL include phases for intake, value challenge, clarification, spec kernel, pre-spec gate, OpenSpec write, and validation
 - **AND** the state SHALL include loop guard defaults.
@@ -21,7 +21,7 @@ The workflow SHALL maintain a phase-aware state file at `.writer-workflow/change
 #### Scenario: Existing value-gate workflows remain compatible
 
 - **GIVEN** `.writer-workflow/changes/<change-name>/value-gate.json` exists but `workflow-state.json` is missing
-- **WHEN** `scripts/agent-goal-writer-workflow check <change-name>` runs
+- **WHEN** `scripts/goal-spec-workflow check <change-name>` runs
 - **THEN** the workflow SHALL either synthesize compatible default phase state or report a migration warning
 - **AND** it SHALL NOT discard existing `value-gate.json` decisions.
 
@@ -57,7 +57,7 @@ The workflow SHALL track load-bearing source claims in `.writer-workflow/changes
 #### Scenario: Load-bearing claim blocks pre-spec completion when unpreserved
 
 - **GIVEN** `claim-graph.json` contains a load-bearing claim with status `unpreserved`
-- **WHEN** `scripts/agent-goal-writer-workflow gate <change-name> --pre-spec` runs
+- **WHEN** `scripts/goal-spec-workflow gate <change-name> --pre-spec` runs
 - **THEN** the gate SHALL report a blocker unless the claim is explicitly deferred, marked non-load-bearing, or acknowledged as an assumption/open question.
 
 #### Scenario: Preserved claim names OpenSpec destination

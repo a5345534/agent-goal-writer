@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "objective": "Implement the value-gated agent-goal-writer workflow so ambiguous goals are challenged, clarified, pre-spec gated, and only then written as OpenSpec.",
+  "objective": "Implement the value-gated goal-spec workflow so ambiguous goals are challenged, clarified, pre-spec gated, and only then written as OpenSpec.",
   "defaults": {
     "completionGates": [
       "controller-validation"
@@ -35,7 +35,7 @@
   "nodes": [
     {
       "id": "skill-contract",
-      "objective": "Update SKILL.md to define agent-goal-writer as a critical collaborator rather than an order-taker, add the value-gated workflow stages before OpenSpec scaffolding, document the Value Challenge Gate, constructive disagreement protocol, no-build option, smaller-scope option, proceed_with_assumptions path, and pre-spec quality rubric.",
+      "objective": "Update SKILL.md to define goal-spec as a critical collaborator rather than an order-taker, add the value-gated workflow stages before OpenSpec scaffolding, document the Value Challenge Gate, constructive disagreement protocol, no-build option, smaller-scope option, proceed_with_assumptions path, and pre-spec quality rubric.",
       "outputs": [
         "SKILL.md"
       ],
@@ -44,10 +44,10 @@
           "SKILL.md"
         ],
         "modules": [
-          "agent-goal-writer"
+          "goal-spec"
         ],
         "capabilities": [
-          "agent-goal-writer-workflow"
+          "goal-spec-workflow"
         ]
       },
       "scope": "skill contract and prompt-level workflow",
@@ -59,19 +59,19 @@
     },
     {
       "id": "workflow-helper",
-      "objective": "Add scripts/agent-goal-writer-workflow using only standard-library automation or a thin wrapper around it. Implement init, check, gate --pre-spec, and write-spec; create .writer-workflow artifacts; enforce blocked/pass/proceed_with_assumptions statuses; require explicit acknowledgement for proceed_with_assumptions; and return stable non-zero exit codes plus machine-readable status output.",
+      "objective": "Add scripts/goal-spec-workflow using only standard-library automation or a thin wrapper around it. Implement init, check, gate --pre-spec, and write-spec; create .writer-workflow artifacts; enforce blocked/pass/proceed_with_assumptions statuses; require explicit acknowledgement for proceed_with_assumptions; and return stable non-zero exit codes plus machine-readable status output.",
       "outputs": [
-        "scripts/agent-goal-writer-workflow"
+        "scripts/goal-spec-workflow"
       ],
       "conflicts": {
         "files": [
-          "scripts/agent-goal-writer-workflow"
+          "scripts/goal-spec-workflow"
         ],
         "modules": [
           "scripts"
         ],
         "capabilities": [
-          "agent-goal-writer-workflow"
+          "goal-spec-workflow"
         ]
       },
       "scope": "workflow helper CLI and local artifact templates",
@@ -93,7 +93,7 @@
           "tests"
         ],
         "capabilities": [
-          "agent-goal-writer-workflow"
+          "goal-spec-workflow"
         ]
       },
       "scope": "workflow helper verification coverage",
@@ -131,7 +131,7 @@
           "openspec"
         ],
         "capabilities": [
-          "agent-goal-writer-workflow"
+          "goal-spec-workflow"
         ]
       },
       "scope": "documentation and OpenSpec closeout",
@@ -153,7 +153,7 @@
       ],
       "conflicts": {
         "capabilities": [
-          "agent-goal-writer-workflow"
+          "goal-spec-workflow"
         ]
       },
       "scope": "final audit and validation",

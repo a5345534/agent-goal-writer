@@ -1,27 +1,27 @@
 {
   "schemaVersion": "1.0",
   "changeName": "clarify-value-gated-writer-workflow",
-  "generatedAt": "2026-06-13T15:40:14.428038+00:00",
+  "generatedAt": "2026-06-14T12:24:00.746157+00:00",
   "sources": [
     {
       "path": "proposal.md",
       "kind": "proposal",
-      "sha256": "e93f2b86157b7fa53a06f5bff75b348fdfebeb7f7ef827188c2ffd2842910f85"
+      "sha256": "47cd43acdc706993af625991508d8b2de6330a4405cb5949354e571bbc38162d"
     },
     {
       "path": "design.md",
       "kind": "design",
-      "sha256": "dc41494a133b5c41991836a287712357083a17dae383eb999c9c8c75b425b3b1"
+      "sha256": "ae1b142eab3a4be30638df8d2e9ee2d1f8d57de9de0e5fe9214e7492897faba9"
     },
     {
       "path": "tasks.md",
       "kind": "tasks",
-      "sha256": "8fce173cc31aa39b286d4273cdf4e551b36d7727f146120ab2c9a2fa228a5ff3"
+      "sha256": "dedd723b3b5606b0b43a9f6f99346398d4289b5662b9df006cfdcf19e6e9848a"
     },
     {
-      "path": "specs/agent-goal-writer-workflow/spec.md",
+      "path": "specs/goal-spec-workflow/spec.md",
       "kind": "spec-delta",
-      "sha256": "8d8c1c6adbd5140c1101ba11fcc5486635e24a541582107907bf730ab057e6da"
+      "sha256": "5332e319a39a37160f54e8d20fb268b007e8b0d9b914611333e628cd493b1e40"
     }
   ]
 }

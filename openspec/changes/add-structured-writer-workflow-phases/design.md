@@ -47,7 +47,7 @@ Omnigent demonstrates useful production patterns for this class of problem: phas
 
 ## Non-Goals
 
-- Rewriting `agent-goal-writer` as a general autonomous agent framework.
+- Rewriting `goal-spec` as a general autonomous agent framework.
 - Copying Omnigent code or relying on Omnigent as a dependency.
 - Replacing `openspec-build-source-manifest`, explainer validation, or archive preflight helpers.
 - Treating workflow-state files as OpenSpec archive targets.
@@ -80,7 +80,7 @@ Initial shape:
 {
   "schemaVersion": "1.1",
   "changeName": "add-structured-writer-workflow-phases",
-  "capability": "agent-goal-writer-workflow",
+  "capability": "goal-spec-workflow",
   "activePhase": "value_challenge",
   "phases": [
     {
@@ -203,7 +203,7 @@ Initial shape:
       "destinations": [
         {"file": "proposal.md", "section": "Why"},
         {"file": "design.md", "section": "Decisions"},
-        {"file": "specs/agent-goal-writer-workflow/spec.md", "section": "Value Challenge Gate"}
+        {"file": "specs/goal-spec-workflow/spec.md", "section": "Value Challenge Gate"}
       ]
     }
   ],
@@ -307,7 +307,7 @@ Existing files remain valid:
 ### Module Boundaries
 
 - `SKILL.md` owns prompt-level behavior: when to challenge, when to proceed, and what must be preserved.
-- `scripts/agent-goal-writer-workflow` owns deterministic workspace-state artifacts and gate checks.
+- `scripts/goal-spec-workflow` owns deterministic workspace-state artifacts and gate checks.
 - `scripts/openspec-*` helpers own manifest, explainer, and archive validation.
 - `.writer-workflow/changes/<change-name>/` is workspace-local and should stay out of governed OpenSpec sources except as summarized in proposal/design/tasks/spec.
 

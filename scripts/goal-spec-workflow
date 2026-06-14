@@ -1,0 +1,1658 @@
+#!/usr/bin/env python3
+"""Value-gated workflow helper for goal-spec.
+
+The helper intentionally uses only the Python standard library. It creates and
+checks local `.writer-workflow` artifacts before an OpenSpec package is written,
+so agents have a machine-checkable pre-spec gate instead of relying only on
+prompt discipline.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+SCHEMA_VERSION = "1.0"
+ARTIFACT_ROOT = ".writer-workflow"
+CHANGE_ARTIFACTS_DIR = "changes"
+ARTIFACT_DIR = ARTIFACT_ROOT
+VALUE_GATE_FILE = "value-gate.json"
+WORKFLOW_STATE_FILE = "workflow-state.json"
+EXTRACTED_CLAIMS_FILE = "extracted-claims.json"
+REFLECTION_REPORT_FILE = "reflection-report.json"
+RECOVERY_ACTIONS_FILE = "recovery-actions.json"
+CLAIM_GRAPH_FILE = "claim-graph.json"
+STATUS_FILE = "status.json"
+PRE_SPEC_GATE_FILE = "pre-spec-gate.json"
+WRITE_SPEC_STATUS_FILE = "write-spec-status.json"
+VALID_STATUSES = ("blocked", "pass", "proceed_with_assumptions")
+PHASE_STATUSES = ("pending", "active", "complete", "skipped", "blocked")
+RECOVERY_ACTIONS = (
+    "ask-one-question",
+    "no-build",
+    "smaller-scope",
+    "proceed-with-assumptions",
+    "block-high-stakes",
+    "proceed-to-gate",
+)
+WORKFLOW_SCHEMA_VERSION = "1.1"
+CLAIM_GRAPH_SCHEMA_VERSION = "1.0"
+CHANGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+EXIT_PASS = 0
+EXIT_BLOCKED = 20
+EXIT_ACK_REQUIRED = 30
+EXIT_INVALID_ARTIFACT = 40
+EXIT_WRITE_FAILED = 50
+EXIT_USAGE = 64
+
+EXIT_CODE_NAMES = {
+    EXIT_PASS: "pass",
+    EXIT_BLOCKED: "blocked",
+    EXIT_ACK_REQUIRED: "acknowledgement_required",
+    EXIT_INVALID_ARTIFACT: "invalid_artifact",
+    EXIT_WRITE_FAILED: "write_failed",
+    EXIT_USAGE: "usage_error",
+}
+
+PLACEHOLDER_VALUES = {
+    "",
+    "tbd",
+    "todo",
+    "n/a",
+    "na",
+    "none",
+    "unknown",
+    "replace me",
+    "replace-me",
+    "fill me",
+    "fill-me",
+}
+
+REQUIRED_PRE_SPEC_FIELDS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("changeName",), "change name"),
+    (("capability",), "capability/spec name"),
+    (("goal",), "user goal or intended outcome"),
+    (("valueFrame", "beneficiary"), "beneficiary"),
+    (("valueFrame", "problemOrOpportunity"), "problem/opportunity"),
+    (("valueFrame", "whyNow"), "why now"),
+    (("valueFrame", "successSignal"), "success signal"),
+    (("valueFrame", "costRiskShape"), "cost/risk shape"),
+    (("valueFrame", "scopeSummary"), "smallest useful scope"),
+    (("valueFrame", "verificationPath"), "verification path"),
+    (("decision", "rationale"), "value-gate rationale"),
+    (("decision", "noBuildConsidered"), "no-build consideration"),
+    (("decision", "smallerScopeConsidered"), "smaller-scope consideration"),
+)
+
+# Registry-style organization inspired by Omnigent's DomainRegistry pattern.
+# These are static standard-library data structures, not dynamic plugins.
+WORKFLOW_PHASE_TEMPLATES: tuple[dict[str, Any], ...] = (
+    {
+        "id": "intake",
+        "label": "Intake",
+        "objective": "Capture raw goal, source material, stakes, and ownership context.",
+        "steps": ("raw_goal", "inputs", "stakes"),
+    },
+    {
+        "id": "value_challenge",
+        "label": "Value Challenge",
+        "objective": "Challenge value, no-build, smaller-scope, and cost of inaction.",
+        "steps": ("beneficiary", "problem", "no_build", "smaller_scope", "value_rationale"),
+    },
+    {
+        "id": "clarification",
+        "label": "Clarification",
+        "objective": "Resolve scope, constraints, affected surfaces, and open questions.",
+        "steps": ("scope", "constraints", "non_goals", "open_questions"),
+    },
+    {
+        "id": "spec_kernel",
+        "label": "Spec Kernel",
+        "objective": "Distill why, capabilities, constraints, non-goals, success, assumptions.",
+        "steps": ("why", "capabilities", "success_signal", "assumptions"),
+    },
+    {
+        "id": "pre_spec_gate",
+        "label": "Pre-Spec Gate",
+        "objective": "Verify readiness, acknowledgement, and claim preservation before writing.",
+        "steps": ("value_gate", "claim_graph", "loop_guards"),
+    },
+    {
+        "id": "openspec_write",
+        "label": "OpenSpec Write",
+        "objective": "Write proposal, design, tasks, spec delta, and manifest.",
+        "steps": ("proposal", "design", "tasks", "spec_delta"),
+    },
+    {
+        "id": "validation",
+        "label": "Validation",
+        "objective": "Run manifest, explainer, workflow, and archive-readiness validation.",
+        "steps": ("manifest", "explainer", "archive_preflight"),
+    },
+)
+
+GATE_CHECKS: dict[str, str] = {
+    "pre_spec_artifact": "value-gate schema and required pre-spec fields",
+    "phase_state": "workflow-state phases and active phase",
+    "claim_preservation": "load-bearing claims preserved or explicitly deferred",
+    "loop_guards": "clarification/challenge loop limits not exceeded",
+}
+
+EXTRACTORS: dict[str, tuple[str, ...]] = {
+    "value_frame": (
+        "beneficiary",
+        "problemOrOpportunity",
+        "whyNow",
+        "successSignal",
+        "costRiskShape",
+        "noBuildCandidate",
+        "smallerScopeCandidate",
+        "scopeSummary",
+        "verificationPath",
+    ),
+    "decision": ("rationale", "noBuildConsidered", "smallerScopeConsidered"),
+}
+
+REFLECTORS: dict[str, str] = {
+    "value_clarity": "beneficiary, problem, why-now, and rationale must be present",
+    "scope_discipline": "scope, non-goals, no-build, and smaller-scope must be visible",
+    "verification": "success signal and verification path must be observable",
+    "assumption_posture": "proceed_with_assumptions requires explicit acknowledgement",
+}
+
+RECOVERY_STRATEGIES: dict[str, str] = {
+    "ask-one-question": "Ask one focused question that resolves the highest-impact blocker.",
+    "no-build": "Recommend no-build when value is not established.",
+    "smaller-scope": "Recommend a smaller governed slice when scope is too broad.",
+    "proceed-with-assumptions": "Proceed only with explicit acknowledgement and visible assumptions.",
+    "block-high-stakes": "Block irreversible or high-stakes ambiguity.",
+    "proceed-to-gate": "Run the pre-spec gate when no blockers remain.",
+}
+
+PRESERVATION_RULES: dict[str, tuple[str, ...]] = {
+    "proposal.md": ("why", "scope", "impact", "success", "assumptions", "open_questions"),
+    "design.md": ("decisions", "alternatives", "risks", "constraints", "preservation_notes"),
+    "tasks.md": ("implementation", "verification", "closeout"),
+    "specs/**/spec.md": ("normative_behavior", "scenarios"),
+}
+
+README_TEMPLATE = """# Goal Spec local workflow artifacts
+
+This directory is owned by `scripts/goal-spec-workflow`.
+It records the workspace-local value gate for one OpenSpec change before that
+package is scaffolded or written. The normal location is
+`.writer-workflow/changes/<change-name>/`; the OpenSpec package remains under
+`openspec/changes/<change-name>/`.
+
+## Files
+
+- `value-gate.json` — machine-readable pre-spec gate state. Edit this file to
+  move from `blocked` to `pass` or `proceed_with_assumptions`.
+- `workflow-state.json` — phase-aware progress, active phase, and loop guards.
+- `extracted-claims.json` — deterministic extraction from value-frame/source fields.
+- `reflection-report.json` — value/scope/risk/verification gap report.
+- `recovery-actions.json` — one recommended next action.
+- `claim-graph.json` — load-bearing claim preservation map.
+- `spec-kernel.md` — scratch template for the human-readable Spec Kernel.
+- `status.json`, `pre-spec-gate.json`, `write-spec-status.json` — reports
+  written by the helper. These workflow-state reports are workspace artifacts,
+  not authoritative OpenSpec sources.
+
+## Allowed statuses
+
+- `blocked`: do not write an OpenSpec package. Add blockers or open questions.
+- `pass`: value, scope, success, alternatives, and verification are clear enough
+  to write the package.
+- `proceed_with_assumptions`: progress is useful but uncertainty remains. This
+  status requires explicit acknowledgement before `gate --pre-spec` and
+  `write-spec` return success.
+
+## Exit codes
+
+- `0`: gate passed (`pass`, or acknowledged `proceed_with_assumptions`).
+- `20`: blocked status.
+- `30`: `proceed_with_assumptions` needs acknowledgement.
+- `40`: missing or invalid workflow artifact.
+- `50`: writing the OpenSpec package failed.
+- `64`: command-line usage error.
+"""
+
+SPEC_KERNEL_TEMPLATE = """# Spec Kernel
+
+Use this scratchpad before `write-spec`. Keep source-grounded claims here, then
+make sure they land in `proposal.md`, `design.md`, `tasks.md`, or the spec delta.
+
+- Why: <force behind the change>
+- Capabilities:
+  - <what users/systems must be able to do; WHAT, not HOW>
+- Constraints:
+  - <non-negotiable condition that bends design decisions>
+- Non-goals:
+  - <explicitly out of scope>
+- Success signal: <observable proof the change worked>
+- Assumptions:
+  - <[ASSUMPTION] inference or `None`>
+- Open questions:
+  - <decision still needed or `None`>
+"""
+
+
+def utc_now() -> str:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def today() -> str:
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+
+def dump(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+class WorkflowArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:  # pragma: no cover - argparse hook
+        dump(
+            {
+                "schemaVersion": SCHEMA_VERSION,
+                "status": "usage_error",
+                "result": "usage_error",
+                "allowed": False,
+                "exitCode": EXIT_USAGE,
+                "exitCodeName": EXIT_CODE_NAMES[EXIT_USAGE],
+                "error": message,
+            }
+        )
+        raise SystemExit(EXIT_USAGE)
+
+
+def parser_factory(*args: Any, **kwargs: Any) -> WorkflowArgumentParser:
+    return WorkflowArgumentParser(*args, **kwargs)
+
+
+def json_report(command: str, status: str, result: str, exit_code: int, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schemaVersion": SCHEMA_VERSION,
+        "command": command,
+        "status": status,
+        "result": result,
+        "allowed": exit_code == EXIT_PASS,
+        "exitCode": exit_code,
+        "exitCodeName": EXIT_CODE_NAMES.get(exit_code, "unknown"),
+        "generatedAt": utc_now(),
+    }
+    payload.update(extra)
+    return payload
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    raw = path.read_text()
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON root must be an object: {path}")
+    return payload
+
+
+def project_root(raw: str | None) -> Path:
+    return Path(raw or ".").resolve()
+
+
+def resolve_under_root(root: Path, raw: str) -> Path:
+    path = Path(raw)
+    return path if path.is_absolute() else root / path
+
+
+def normalize_optional_text(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def requested_change_name(args: argparse.Namespace) -> str | None:
+    positional = normalize_optional_text(getattr(args, "change_name_arg", None))
+    named = normalize_optional_text(getattr(args, "change_name", None))
+    if positional and named and positional != named:
+        raise ValueError("positional change name and --change-name must match when both are provided")
+    return positional or named
+
+
+def positional_change_name(args: argparse.Namespace) -> str | None:
+    return normalize_optional_text(getattr(args, "change_name_arg", None))
+
+
+def artifact_dir(root: Path, raw: str | None, change_name: str | None = None) -> Path:
+    if raw:
+        return resolve_under_root(root, raw)
+    if change_name:
+        return root / ARTIFACT_ROOT / CHANGE_ARTIFACTS_DIR / change_name
+    return root / ARTIFACT_ROOT
+
+
+def value_gate_path(root: Path, raw_artifact_dir: str | None, change_name: str | None = None) -> Path:
+    return artifact_dir(root, raw_artifact_dir, change_name) / VALUE_GATE_FILE
+
+
+def is_placeholder(value: Any) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in PLACEHOLDER_VALUES:
+        return True
+    if lowered.startswith("<") and lowered.endswith(">"):
+        return True
+    if "<" in lowered and ">" in lowered:
+        return True
+    if re.fullmatch(r"(?:tbd|todo)[\s.:-]*", lowered):
+        return True
+    return False
+
+
+def is_filled(value: Any) -> bool:
+    return not is_placeholder(value)
+
+
+def get_path(payload: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for part in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def set_path(payload: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    current = payload
+    for part in path[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[path[-1]] = value
+
+
+def list_items(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if is_filled(item)]
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        return [stripped] if is_filled(stripped) else []
+    return [str(raw).strip()] if is_filled(raw) else []
+
+
+def markdown_bullets(items: list[str], *, empty: str = "None", assumption: bool = False) -> str:
+    if not items:
+        return f"- {empty}"
+    rendered: list[str] = []
+    for item in items:
+        text = item.strip()
+        if assumption and text and not text.lower().startswith("[assumption]"):
+            text = f"[ASSUMPTION] {text}"
+        rendered.append(f"- {text}")
+    return "\n".join(rendered)
+
+
+def markdown_questions(items: list[str]) -> str:
+    if not items:
+        return "- [ ] None"
+    return "\n".join(f"- [ ] {item}" for item in items)
+
+
+def indent_markdown(text: str, prefix: str = "  ") -> str:
+    return "\n".join(f"{prefix}{line}" if line else line for line in text.splitlines())
+
+
+def validate_name(name: str, label: str, errors: list[str]) -> None:
+    if not CHANGE_NAME_RE.fullmatch(name):
+        errors.append(f"invalid_{label}: must match ^[a-z0-9][a-z0-9-]*$")
+
+
+def default_value_gate(change_name: str | None, capability: str | None, goal: str | None) -> dict[str, Any]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": "blocked",
+        "changeName": change_name or "",
+        "capability": capability or "",
+        "goal": goal or "",
+        "createdAt": utc_now(),
+        "updatedAt": utc_now(),
+        "valueFrame": {
+            "beneficiary": "",
+            "problemOrOpportunity": "",
+            "whyNow": "",
+            "successSignal": "",
+            "costRiskShape": "",
+            "noBuildCandidate": "",
+            "smallerScopeCandidate": "",
+            "scopeSummary": "",
+            "verificationPath": "",
+        },
+        "decision": {
+            "rationale": "",
+            "noBuildConsidered": "",
+            "smallerScopeConsidered": "",
+        },
+        "constraints": [],
+        "nonGoals": [],
+        "assumptions": [],
+        "risks": [],
+        "openQuestions": [],
+        "blockers": [
+            "Complete the valueFrame and decision fields, then set status to pass or proceed_with_assumptions."
+        ],
+        "acknowledgement": {
+            "requiredFor": "proceed_with_assumptions",
+            "accepted": False,
+            "acceptedAt": "",
+            "acceptedBy": "",
+            "rationale": "",
+        },
+    }
+
+
+def default_phase(phase_template: dict[str, Any], *, active: bool = False) -> dict[str, Any]:
+    return {
+        "id": phase_template["id"],
+        "label": phase_template["label"],
+        "objective": phase_template["objective"],
+        "status": "active" if active else "pending",
+        "skipCondition": "",
+        "consecutiveFailures": 0,
+        "steps": [
+            {"id": step_id, "status": "pending", "summary": ""}
+            for step_id in phase_template.get("steps", ())
+        ],
+    }
+
+
+def default_workflow_state(change_name: str | None, capability: str | None, goal: str | None) -> dict[str, Any]:
+    phases = [default_phase(template, active=(i == 0)) for i, template in enumerate(WORKFLOW_PHASE_TEMPLATES)]
+    return {
+        "schemaVersion": WORKFLOW_SCHEMA_VERSION,
+        "changeName": change_name or "",
+        "capability": capability or "",
+        "goal": goal or "",
+        "activePhase": phases[0]["id"],
+        "phases": phases,
+        "loopGuards": {
+            "clarificationTurns": 0,
+            "challengeTurns": 0,
+            "repeatedQuestionHashes": [],
+            "repeatedChallengeHashes": [],
+            "maxClarificationTurns": 3,
+            "maxChallengeTurns": 2,
+            "maxRepeatedQuestionCount": 2,
+            "maxRepeatedChallengeCount": 2,
+        },
+        "createdAt": utc_now(),
+        "updatedAt": utc_now(),
+    }
+
+
+def default_claim_graph(change_name: str | None) -> dict[str, Any]:
+    return {
+        "schemaVersion": CLAIM_GRAPH_SCHEMA_VERSION,
+        "changeName": change_name or "",
+        "claims": [],
+        "edges": [],
+        "updatedAt": utc_now(),
+    }
+
+
+def read_json_optional(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return read_json(path)
+    except Exception:
+        return None
+
+
+def field_status(value: Any) -> str:
+    return "present" if is_filled(value) else "missing"
+
+
+def extract_claims_from_gate(payload: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for section, names in EXTRACTORS.items():
+        section_payload = payload.get(section)
+        if not isinstance(section_payload, dict):
+            section_payload = {}
+        fields[section] = {
+            name: {
+                "value": section_payload.get(name, ""),
+                "status": field_status(section_payload.get(name)),
+            }
+            for name in names
+        }
+
+    list_fields = {
+        "constraints": list_items(payload.get("constraints")),
+        "nonGoals": list_items(payload.get("nonGoals")),
+        "assumptions": list_items(payload.get("assumptions")),
+        "risks": list_items(payload.get("risks")),
+        "openQuestions": list_items(payload.get("openQuestions")),
+        "blockers": list_items(payload.get("blockers")),
+    }
+
+    claims: list[dict[str, Any]] = []
+    problem = get_path(payload, ("valueFrame", "problemOrOpportunity"))
+    if is_filled(problem):
+        claims.append({"id": "claim-problem", "kind": "problem", "text": str(problem), "loadBearing": True, "source": "value-gate"})
+    success = get_path(payload, ("valueFrame", "successSignal"))
+    if is_filled(success):
+        claims.append({"id": "claim-success-signal", "kind": "success_signal", "text": str(success), "loadBearing": True, "source": "value-gate"})
+    for index, assumption in enumerate(list_fields["assumptions"], 1):
+        claims.append({"id": f"claim-assumption-{index:03d}", "kind": "assumption", "text": assumption, "loadBearing": True, "source": "value-gate"})
+
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": str(payload.get("changeName", "")),
+        "capability": str(payload.get("capability", "")),
+        "generatedAt": utc_now(),
+        "fields": fields,
+        "lists": list_fields,
+        "claims": claims,
+    }
+
+
+def validate_workflow_state(state: dict[str, Any] | None) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: list[dict[str, str]] = []
+    if state is None:
+        warnings.append(f"missing {WORKFLOW_STATE_FILE}; synthesized compatibility state")
+        checks.append({"name": "phase_state", "status": "warn", "message": "workflow-state missing; compatibility synthesis used"})
+        return errors, warnings, checks
+
+    phases = state.get("phases")
+    if not isinstance(phases, list) or not phases:
+        errors.append("workflow-state phases must be a non-empty array")
+    else:
+        phase_ids = {str(phase.get("id", "")) for phase in phases if isinstance(phase, dict)}
+        active = str(state.get("activePhase", ""))
+        if active and active not in phase_ids:
+            errors.append("workflow-state activePhase must reference an existing phase")
+        for phase in phases:
+            if not isinstance(phase, dict):
+                errors.append("workflow-state phase entries must be objects")
+                continue
+            status = str(phase.get("status", ""))
+            if status not in PHASE_STATUSES:
+                errors.append(f"workflow-state phase {phase.get('id', '<unknown>')} has invalid status {status!r}")
+    loop_guards = state.get("loopGuards")
+    if not isinstance(loop_guards, dict):
+        errors.append("workflow-state loopGuards must be an object")
+    checks.append({"name": "phase_state", "status": "fail" if errors else "pass", "message": "; ".join(errors) or "workflow phase state is valid"})
+    return errors, warnings, checks
+
+
+def repeated_hash_blockers(loop_guards: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    question_hashes = [str(item) for item in loop_guards.get("repeatedQuestionHashes", []) if is_filled(item)]
+    challenge_hashes = [str(item) for item in loop_guards.get("repeatedChallengeHashes", []) if is_filled(item)]
+    max_question = int(loop_guards.get("maxRepeatedQuestionCount") or 2)
+    max_challenge = int(loop_guards.get("maxRepeatedChallengeCount") or 2)
+    for label, hashes, limit in (("clarification question", question_hashes, max_question), ("value challenge", challenge_hashes, max_challenge)):
+        counts: dict[str, int] = {}
+        for item in hashes:
+            counts[item] = counts.get(item, 0) + 1
+        repeated = [item for item, count in counts.items() if count >= limit]
+        if repeated:
+            blockers.append(f"loop guard: repeated {label} reached limit {limit}")
+    clarification_turns = int(loop_guards.get("clarificationTurns") or 0)
+    challenge_turns = int(loop_guards.get("challengeTurns") or 0)
+    max_clarification = int(loop_guards.get("maxClarificationTurns") or 3)
+    max_challenge_turns = int(loop_guards.get("maxChallengeTurns") or 2)
+    if clarification_turns > max_clarification:
+        blockers.append(f"loop guard: clarification turns {clarification_turns} exceeded max {max_clarification}")
+    if challenge_turns > max_challenge_turns:
+        blockers.append(f"loop guard: challenge turns {challenge_turns} exceeded max {max_challenge_turns}")
+    return blockers
+
+
+def claim_graph_blockers(claim_graph: dict[str, Any] | None) -> list[str]:
+    if claim_graph is None:
+        return []
+    blockers: list[str] = []
+    claims = claim_graph.get("claims")
+    if not isinstance(claims, list):
+        blockers.append("claim graph: claims must be an array")
+        return blockers
+    for index, claim in enumerate(claims, 1):
+        if not isinstance(claim, dict):
+            blockers.append(f"claim graph: claim {index} must be an object")
+            continue
+        load_bearing = bool(claim.get("loadBearing"))
+        status = str(claim.get("status", "unpreserved")).strip() or "unpreserved"
+        claim_id = str(claim.get("id") or f"claim-{index}")
+        acknowledged = claim.get("acknowledged") is True
+        allowed_unpreserved = status in {"deferred", "non_load_bearing", "assumption", "open_question"} or acknowledged
+        if load_bearing and status == "preserved":
+            destinations = claim.get("destinations")
+            if not isinstance(destinations, list) or not destinations:
+                blockers.append(f"claim graph: preserved load-bearing claim {claim_id} has no OpenSpec destination")
+        elif load_bearing and not allowed_unpreserved:
+            blockers.append(f"claim graph: load-bearing claim {claim_id} is {status}")
+    return blockers
+
+
+def reflection_report(payload: dict[str, Any], extracted: dict[str, Any], workflow_state: dict[str, Any] | None, claim_graph: dict[str, Any] | None) -> dict[str, Any]:
+    gaps: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+    info: list[dict[str, str]] = []
+    for path, label in REQUIRED_PRE_SPEC_FIELDS:
+        if not is_filled(get_path(payload, path)):
+            severity = "blocker" if str(payload.get("status", "blocked")) in {"pass", "proceed_with_assumptions"} else "warning"
+            gaps.append({"kind": "missing_field", "field": ".".join(path), "label": label, "severity": severity})
+    if str(payload.get("status", "")) == "pass" and list_items(payload.get("openQuestions")):
+        warnings.append({"kind": "open_questions_on_pass", "severity": "warning", "message": "pass status has open questions"})
+    loop_blockers = repeated_hash_blockers((workflow_state or {}).get("loopGuards", {}) if isinstance((workflow_state or {}).get("loopGuards", {}), dict) else {})
+    for blocker in loop_blockers:
+        gaps.append({"kind": "loop_guard", "severity": "blocker", "message": blocker})
+    for blocker in claim_graph_blockers(claim_graph):
+        gaps.append({"kind": "claim_preservation", "severity": "blocker", "message": blocker})
+    if not gaps and not warnings:
+        info.append({"kind": "ready", "severity": "info", "message": "No deterministic reflection gaps detected"})
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": str(payload.get("changeName", "")),
+        "generatedAt": utc_now(),
+        "gaps": gaps,
+        "warnings": warnings,
+        "info": info,
+        "summary": {
+            "blockerCount": sum(1 for gap in gaps if gap.get("severity") == "blocker"),
+            "warningCount": len(warnings) + sum(1 for gap in gaps if gap.get("severity") == "warning"),
+        },
+    }
+
+
+def choose_recovery_action(payload: dict[str, Any], reflection: dict[str, Any], workflow_state: dict[str, Any] | None) -> dict[str, Any]:
+    gaps = reflection.get("gaps") if isinstance(reflection.get("gaps"), list) else []
+    blocker_kinds = {str(gap.get("kind", "")) for gap in gaps if isinstance(gap, dict) and gap.get("severity") == "blocker"}
+    loop_guards = (workflow_state or {}).get("loopGuards", {})
+    if not isinstance(loop_guards, dict):
+        loop_guards = {}
+    high_stakes = any("security" in item.lower() or "production" in item.lower() or "api" in item.lower() for item in list_items(payload.get("risks")))
+    if high_stakes and blocker_kinds:
+        action = "block-high-stakes"
+    elif "loop_guard" in blocker_kinds and list_items(payload.get("assumptions")):
+        action = "proceed-with-assumptions"
+    elif "claim_preservation" in blocker_kinds:
+        action = "ask-one-question"
+    elif blocker_kinds:
+        action = "ask-one-question"
+    elif str(payload.get("status", "")) == "blocked":
+        action = "ask-one-question"
+    elif not is_filled(get_path(payload, ("decision", "noBuildConsidered"))):
+        action = "no-build"
+    elif not is_filled(get_path(payload, ("decision", "smallerScopeConsidered"))):
+        action = "smaller-scope"
+    elif str(payload.get("status", "")) == "proceed_with_assumptions":
+        action = "proceed-with-assumptions"
+    else:
+        action = "proceed-to-gate"
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": str(payload.get("changeName", "")),
+        "generatedAt": utc_now(),
+        "recommendedAction": action,
+        "strategy": RECOVERY_STRATEGIES[action],
+        "alternatives": [name for name in RECOVERY_ACTIONS if name != action],
+    }
+
+
+def ensure_structured_artifacts(base: Path, payload: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    change_name = str(payload.get("changeName", ""))
+    capability = str(payload.get("capability", ""))
+    goal = str(payload.get("goal", ""))
+    files: dict[str, str] = {}
+
+    workflow_path = base / WORKFLOW_STATE_FILE
+    workflow_state = read_json_optional(workflow_path)
+    if force or workflow_state is None:
+        workflow_state = default_workflow_state(change_name, capability, goal)
+        write_json(workflow_path, workflow_state)
+    files["workflowStateFile"] = str(workflow_path)
+
+    claim_graph_path = base / CLAIM_GRAPH_FILE
+    claim_graph = read_json_optional(claim_graph_path)
+    if force or claim_graph is None:
+        claim_graph = default_claim_graph(change_name)
+        write_json(claim_graph_path, claim_graph)
+    files["claimGraphFile"] = str(claim_graph_path)
+
+    extracted = extract_claims_from_gate(payload)
+    extracted_path = base / EXTRACTED_CLAIMS_FILE
+    write_json(extracted_path, extracted)
+    files["extractedClaimsFile"] = str(extracted_path)
+
+    reflection = reflection_report(payload, extracted, workflow_state, claim_graph)
+    reflection_path = base / REFLECTION_REPORT_FILE
+    write_json(reflection_path, reflection)
+    files["reflectionReportFile"] = str(reflection_path)
+
+    recovery = choose_recovery_action(payload, reflection, workflow_state)
+    recovery_path = base / RECOVERY_ACTIONS_FILE
+    write_json(recovery_path, recovery)
+    files["recoveryActionsFile"] = str(recovery_path)
+
+    return {
+        "files": files,
+        "workflowState": workflow_state,
+        "extractedClaims": extracted,
+        "reflectionReport": reflection,
+        "recoveryActions": recovery,
+        "claimGraph": claim_graph,
+    }
+
+
+def structured_artifact_findings(base: Path, payload: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str], list[dict[str, str]]]:
+    context = ensure_structured_artifacts(base, payload)
+    warnings: list[str] = []
+    errors: list[str] = []
+    checks: list[dict[str, str]] = []
+
+    workflow_state = context.get("workflowState") if isinstance(context.get("workflowState"), dict) else None
+    state_errors, state_warnings, state_checks = validate_workflow_state(workflow_state)
+    errors.extend(state_errors)
+    warnings.extend(state_warnings)
+    checks.extend(state_checks)
+
+    loop_blockers = repeated_hash_blockers((workflow_state or {}).get("loopGuards", {}) if isinstance((workflow_state or {}).get("loopGuards", {}), dict) else {})
+    if loop_blockers:
+        checks.append({"name": "loop_guards", "status": "fail", "message": "; ".join(loop_blockers)})
+    else:
+        checks.append({"name": "loop_guards", "status": "pass", "message": "loop guard limits are not exceeded"})
+
+    claim_blockers = claim_graph_blockers(context.get("claimGraph") if isinstance(context.get("claimGraph"), dict) else None)
+    if claim_blockers:
+        checks.append({"name": "claim_preservation", "status": "fail", "message": "; ".join(claim_blockers)})
+    else:
+        checks.append({"name": "claim_preservation", "status": "pass", "message": "no unpreserved load-bearing claims"})
+
+    blockers = loop_blockers + claim_blockers
+    context["structuredBlockers"] = blockers
+    return context, errors, warnings, checks
+
+
+def load_gate(
+    root: Path,
+    raw_artifact_dir: str | None,
+    command: str,
+    change_name: str | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path]:
+    base = artifact_dir(root, raw_artifact_dir, change_name)
+    path = base / VALUE_GATE_FILE
+    if not path.exists():
+        report = json_report(
+            command,
+            "blocked",
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(path),
+            errors=[f"missing {VALUE_GATE_FILE}; run init first"],
+        )
+        return None, report, base
+    try:
+        return read_json(path), None, base
+    except Exception as err:  # noqa: BLE001
+        report = json_report(
+            command,
+            "blocked",
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(path),
+            errors=[str(err)],
+        )
+        return None, report, base
+
+
+def acknowledgement_valid(payload: dict[str, Any]) -> tuple[bool, list[str]]:
+    ack = payload.get("acknowledgement")
+    if not isinstance(ack, dict):
+        return False, ["acknowledgement object is required"]
+    errors: list[str] = []
+    if ack.get("accepted") is not True:
+        errors.append("acknowledgement.accepted must be true")
+    if not is_filled(ack.get("rationale")):
+        errors.append("acknowledgement.rationale is required")
+    if not is_filled(ack.get("acceptedAt")):
+        errors.append("acknowledgement.acceptedAt is required")
+    if not is_filled(ack.get("acceptedBy")):
+        errors.append("acknowledgement.acceptedBy is required")
+    return not errors, errors
+
+
+def evaluate_gate(payload: dict[str, Any], command: str, base: Path) -> tuple[dict[str, Any], int]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: list[dict[str, str]] = []
+
+    if payload.get("schemaVersion") != SCHEMA_VERSION:
+        errors.append(f"schemaVersion must be {SCHEMA_VERSION}")
+
+    status = str(payload.get("status", "")).strip()
+    if status not in VALID_STATUSES:
+        errors.append("status must be one of: " + ", ".join(VALID_STATUSES))
+        status_for_report = "invalid_artifact"
+    else:
+        status_for_report = status
+
+    change_name = str(payload.get("changeName", "")).strip()
+    capability = str(payload.get("capability", "")).strip()
+    if change_name:
+        validate_name(change_name, "change_name", errors)
+    if capability:
+        validate_name(capability, "capability", errors)
+
+    if status in {"pass", "proceed_with_assumptions"}:
+        missing: list[str] = []
+        for path, label in REQUIRED_PRE_SPEC_FIELDS:
+            if not is_filled(get_path(payload, path)):
+                missing.append(label)
+        if missing:
+            errors.append("missing_or_placeholder_pre_spec_fields: " + ", ".join(missing))
+        assumptions = list_items(payload.get("assumptions"))
+        if status == "proceed_with_assumptions" and not assumptions:
+            errors.append("proceed_with_assumptions requires at least one assumption")
+        if status == "pass" and list_items(payload.get("openQuestions")):
+            warnings.append("status pass has openQuestions; use proceed_with_assumptions if they affect scope, value, or safety")
+
+    if status == "blocked" and not list_items(payload.get("blockers")) and not list_items(payload.get("openQuestions")):
+        warnings.append("blocked status should name at least one blocker or open question")
+
+    if errors:
+        checks.append({"name": "pre_spec_artifact", "status": "fail", "message": "; ".join(errors)})
+        report = json_report(
+            command,
+            status_for_report,
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(base / VALUE_GATE_FILE),
+            changeName=change_name,
+            capability=capability,
+            checks=checks,
+            warnings=warnings,
+            errors=errors,
+        )
+        return report, EXIT_INVALID_ARTIFACT
+
+    checks.append({"name": "pre_spec_artifact", "status": "pass", "message": "artifact schema and status are valid"})
+
+    structured_context, structured_errors, structured_warnings, structured_checks = structured_artifact_findings(base, payload)
+    warnings.extend(structured_warnings)
+    checks.extend(structured_checks)
+    if structured_errors:
+        checks.append({"name": "structured_artifacts", "status": "fail", "message": "; ".join(structured_errors)})
+        report = json_report(
+            command,
+            status_for_report,
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(base / VALUE_GATE_FILE),
+            changeName=change_name,
+            capability=capability,
+            checks=checks,
+            warnings=warnings,
+            errors=structured_errors,
+            workflow=structured_context.get("files", {}),
+        )
+        return report, EXIT_INVALID_ARTIFACT
+
+    structured_blockers = list(structured_context.get("structuredBlockers", []))
+    value_blockers = list_items(payload.get("blockers"))
+    combined_blockers = value_blockers + structured_blockers
+    recovery = structured_context.get("recoveryActions") if isinstance(structured_context.get("recoveryActions"), dict) else {}
+    workflow_state = structured_context.get("workflowState") if isinstance(structured_context.get("workflowState"), dict) else {}
+
+    common = {
+        "artifactDir": str(base),
+        "valueGateFile": str(base / VALUE_GATE_FILE),
+        "changeName": change_name,
+        "capability": capability,
+        "checks": checks,
+        "warnings": warnings,
+        "blockers": combined_blockers,
+        "openQuestions": list_items(payload.get("openQuestions")),
+        "assumptions": list_items(payload.get("assumptions")),
+        "workflow": structured_context.get("files", {}),
+        "activePhase": workflow_state.get("activePhase", "") if isinstance(workflow_state, dict) else "",
+        "recoveryAction": recovery.get("recommendedAction", "") if isinstance(recovery, dict) else "",
+    }
+
+    if status in {"pass", "proceed_with_assumptions"} and structured_blockers:
+        report = json_report(command, "blocked", "blocked", EXIT_BLOCKED, **common)
+        return report, EXIT_BLOCKED
+
+    if status == "blocked":
+        report = json_report(command, "blocked", "blocked", EXIT_BLOCKED, **common)
+        return report, EXIT_BLOCKED
+
+    if status == "proceed_with_assumptions":
+        accepted, ack_errors = acknowledgement_valid(payload)
+        if not accepted:
+            checks.append(
+                {
+                    "name": "assumption_acknowledgement",
+                    "status": "fail",
+                    "message": "; ".join(ack_errors),
+                }
+            )
+            report = json_report(
+                command,
+                "proceed_with_assumptions",
+                "acknowledgement_required",
+                EXIT_ACK_REQUIRED,
+                acknowledgementRequired=True,
+                acknowledgementErrors=ack_errors,
+                **common,
+            )
+            return report, EXIT_ACK_REQUIRED
+        checks.append(
+            {
+                "name": "assumption_acknowledgement",
+                "status": "pass",
+                "message": "proceed_with_assumptions has explicit acknowledgement",
+            }
+        )
+        report = json_report(
+            command,
+            "proceed_with_assumptions",
+            "pass",
+            EXIT_PASS,
+            acknowledgementRequired=False,
+            **common,
+        )
+        return report, EXIT_PASS
+
+    report = json_report(command, "pass", "pass", EXIT_PASS, **common)
+    return report, EXIT_PASS
+
+
+def apply_acknowledgement(payload: dict[str, Any], args: argparse.Namespace, path: Path) -> tuple[dict[str, Any] | None, int | None]:
+    if not getattr(args, "acknowledge_assumptions", False):
+        return None, None
+    rationale = getattr(args, "acknowledgement", None)
+    if not is_filled(rationale):
+        report = json_report(
+            getattr(args, "command", "gate"),
+            str(payload.get("status", "blocked")),
+            "usage_error",
+            EXIT_USAGE,
+            errors=["--acknowledge-assumptions requires --acknowledgement with a non-placeholder rationale"],
+        )
+        return report, EXIT_USAGE
+    accepted_by = getattr(args, "acknowledged_by", None) or os.environ.get("USER") or "unspecified"
+    ack = payload.get("acknowledgement")
+    if not isinstance(ack, dict):
+        ack = {}
+    ack.update(
+        {
+            "requiredFor": "proceed_with_assumptions",
+            "accepted": True,
+            "acceptedAt": utc_now(),
+            "acceptedBy": accepted_by,
+            "rationale": str(rationale).strip(),
+        }
+    )
+    payload["acknowledgement"] = ack
+    payload["updatedAt"] = utc_now()
+    write_json(path, payload)
+    return None, None
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_manifest(change_name: str, base: Path) -> dict[str, Any]:
+    sources: list[dict[str, str]] = []
+    for rel, kind in (("proposal.md", "proposal"), ("design.md", "design"), ("tasks.md", "tasks")):
+        path = base / rel
+        if path.exists():
+            sources.append({"path": rel, "kind": kind, "sha256": sha256_file(path)})
+    specs_dir = base / "specs"
+    if specs_dir.exists():
+        for spec_path in sorted(specs_dir.rglob("spec.md")):
+            sources.append(
+                {
+                    "path": spec_path.relative_to(base).as_posix(),
+                    "kind": "spec-delta",
+                    "sha256": sha256_file(spec_path),
+                }
+            )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": change_name,
+        "generatedAt": utc_now(),
+        "sources": sources,
+    }
+
+
+def write_text_file(path: Path, text: str, *, force: bool, written: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and not force:
+        raise FileExistsError(f"refusing to overwrite existing file without --force: {path}")
+    path.write_text(text.rstrip() + "\n")
+    written.append(str(path))
+
+
+def value(payload: dict[str, Any], path: tuple[str, ...], fallback: str = "TBD") -> str:
+    raw = get_path(payload, path)
+    return str(raw).strip() if is_filled(raw) else fallback
+
+
+def outcome_label(status: str) -> str:
+    return "proceed_to_spec" if status == "pass" else "proceed_with_assumptions"
+
+
+def render_proposal(payload: dict[str, Any]) -> str:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    status = value(payload, ("status",), "pass")
+    assumptions = list_items(payload.get("assumptions"))
+    non_goals = list_items(payload.get("nonGoals"))
+    open_questions = list_items(payload.get("openQuestions"))
+    assumption_posture = "[ASSUMPTION]-tagged and explicitly acknowledged" if status == "proceed_with_assumptions" else "confirmed or not material"
+    return f"""# {change_name}
+
+## Why
+
+{value(payload, ("valueFrame", "problemOrOpportunity"))}
+
+Why now: {value(payload, ("valueFrame", "whyNow"))}
+
+Beneficiary: {value(payload, ("valueFrame", "beneficiary"))}
+
+## Value Gate
+
+- Outcome: `{outcome_label(status)}`
+- No-build considered: {value(payload, ("decision", "noBuildConsidered"))}
+- Smaller-scope considered: {value(payload, ("decision", "smallerScopeConsidered"))}
+- Assumption posture: {assumption_posture}
+
+## What Changes
+
+- {value(payload, ("valueFrame", "scopeSummary"))}
+
+## Impact
+
+- Affected specs: `{capability}`
+- Affected modules/repos: `TBD`
+- Affected APIs/events/data: `TBD`
+- Migration/deployment impact: `TBD`
+- User-visible impact: {value(payload, ("valueFrame", "beneficiary"))}
+
+## Non-Goals
+
+{markdown_bullets(non_goals, empty="TBD")}
+
+## Success Signal
+
+{value(payload, ("valueFrame", "successSignal"))}
+
+## Assumptions
+
+{markdown_bullets(assumptions, assumption=True)}
+
+## Open Questions
+
+{markdown_questions(open_questions)}
+"""
+
+
+def claim_preservation_notes(claim_graph: dict[str, Any] | None) -> str:
+    if not claim_graph or not isinstance(claim_graph.get("claims"), list) or not claim_graph.get("claims"):
+        return "- No load-bearing claims were recorded in `claim-graph.json` at generation time."
+    notes: list[str] = []
+    for index, claim in enumerate(claim_graph.get("claims", []), 1):
+        if not isinstance(claim, dict):
+            continue
+        claim_id = str(claim.get("id") or f"claim-{index}")
+        text = str(claim.get("text") or "").strip() or "<unspecified claim>"
+        status = str(claim.get("status") or "unpreserved")
+        destinations = claim.get("destinations")
+        if isinstance(destinations, list) and destinations:
+            rendered_destinations = ", ".join(
+                str(dest.get("file", dest)) if isinstance(dest, dict) else str(dest)
+                for dest in destinations
+            )
+        else:
+            rendered_destinations = "not yet assigned"
+        notes.append(f"- `{claim_id}` ({status}): {text} → {rendered_destinations}")
+    return "\n".join(notes) if notes else "- No valid claims were recorded in `claim-graph.json`."
+
+
+def render_design(payload: dict[str, Any], claim_graph: dict[str, Any] | None = None) -> str:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    status = value(payload, ("status",), "pass")
+    assumptions = list_items(payload.get("assumptions"))
+    constraints = list_items(payload.get("constraints"))
+    non_goals = list_items(payload.get("nonGoals"))
+    risks = list_items(payload.get("risks"))
+    risk_rows = "\n".join(f"| {risk} | TBD | TBD |" for risk in risks) or "| TBD | TBD | TBD |"
+    return f"""# Design: {change_name}
+
+## Context
+
+{value(payload, ("goal",))}
+
+Current value frame: {value(payload, ("valueFrame", "problemOrOpportunity"))}
+
+Cost/risk shape: {value(payload, ("valueFrame", "costRiskShape"))}
+
+## Spec Kernel
+
+- Why: {value(payload, ("valueFrame", "problemOrOpportunity"))}
+- Value gate outcome: {outcome_label(status)}
+- Capabilities:
+  - `{capability}`: {value(payload, ("valueFrame", "scopeSummary"))}
+- Constraints:
+{indent_markdown(markdown_bullets(constraints, empty="TBD"))}
+- Non-goals:
+{indent_markdown(markdown_bullets(non_goals, empty="TBD"))}
+- Success signal: {value(payload, ("valueFrame", "successSignal"))}
+
+## Goals
+
+- Deliver the smallest useful `{capability}` scope described by the value gate.
+- Preserve the value, assumptions, and verification path in reviewable OpenSpec sources.
+
+## Non-Goals
+
+{markdown_bullets(non_goals, empty="TBD")}
+
+## Concern Scan
+
+| Concern | Relevance | Design response |
+| --- | --- | --- |
+| Value and scope drift | The gate exists to prevent writing low-value or over-broad work. | Keep implementation aligned with the scope summary and non-goals. |
+| Assumptions | Assumptions can change the implementation or verification decision. | Keep `[ASSUMPTION]` tags visible until review retires them. |
+
+## Decisions
+
+### D0. Value path
+
+**Choice**
+{outcome_label(status)}.
+
+**Rationale**
+{value(payload, ("decision", "rationale"))}
+
+**Alternatives considered**
+- No-build: {value(payload, ("decision", "noBuildConsidered"))}
+- Smaller/larger scope: {value(payload, ("decision", "smallerScopeConsidered"))}
+
+## Detailed Design
+
+### Data / Contract Changes
+
+TBD
+
+### Execution Flow
+
+TBD
+
+### Module Boundaries
+
+TBD
+
+### Migration / Rollout
+
+TBD
+
+## Risks
+
+| Risk | Severity | Mitigation |
+| --- | --- | --- |
+{risk_rows}
+
+## Verification Plan
+
+- {value(payload, ("valueFrame", "verificationPath"))}
+
+## Assumptions
+
+{markdown_bullets(assumptions, assumption=True)}
+
+## Load-Bearing Preservation Notes
+
+- Value gate status `{status}` and rationale are preserved in `proposal.md` and this design.
+- Success signal is preserved in `proposal.md`, this design, and the spec scenario.
+
+### Claim Graph Preservation
+
+{claim_preservation_notes(claim_graph)}
+"""
+
+
+def render_tasks(payload: dict[str, Any]) -> str:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    verification = value(payload, ("valueFrame", "verificationPath"))
+    return f"""# Tasks: {change_name}
+
+## 1. Spec and Contract
+
+- [ ] 1.1 Update `{capability}` spec delta.
+- [ ] 1.2 Confirm affected APIs/events/data contracts.
+- [ ] 1.3 Retire or confirm any `[ASSUMPTION]` items before implementation-sensitive decisions.
+
+## 2. Implementation
+
+- [ ] 2.1 Implement the smallest useful scope recorded in the value gate.
+- [ ] 2.2 Preserve non-goals and boundaries from the design.
+
+## 3. Verification
+
+- [ ] 3.1 Run `{verification}`.
+- [ ] 3.2 Verify the success signal from `proposal.md`.
+
+## 4. Documentation / Closeout
+
+- [ ] 4.1 Update relevant docs if user-visible behavior, API contracts, deployment, module responsibility, or cross-module interaction changed.
+- [ ] 4.2 Refresh `source-manifest.json`.
+- [ ] 4.3 Validate `change-explainer.html` if required.
+- [ ] 4.4 Run archive preflight when implementation is complete.
+
+## Backlog / Follow-ups
+
+- [ ] [BACKLOG] Add non-blocking deferred work only after the proposal/design name it as out of scope.
+"""
+
+
+def render_spec(payload: dict[str, Any]) -> str:
+    capability = value(payload, ("capability",))
+    scope = value(payload, ("valueFrame", "scopeSummary"))
+    success = value(payload, ("valueFrame", "successSignal"))
+    return f"""# {capability} Specification
+
+## Purpose
+
+This capability owns the behavior needed to satisfy the value-gated scope for this change.
+
+## Requirements
+
+### Requirement: Value-gated scope
+
+The system SHALL provide the smallest useful behavior described by this change: {scope}
+
+#### Scenario: Success signal is observable
+
+- **GIVEN** the change has been implemented
+- **WHEN** reviewers run the verification path
+- **THEN** they can observe: {success}
+"""
+
+
+def render_yaml(payload: dict[str, Any]) -> str:
+    return f"""name: {value(payload, ("changeName",))}
+created: {today()}
+status: draft
+valueGateStatus: {value(payload, ("status",), "pass")}
+"""
+
+
+def write_spec_package(payload: dict[str, Any], root: Path, args: argparse.Namespace, workflow_base: Path | None = None) -> dict[str, Any]:
+    change_name = value(payload, ("changeName",))
+    capability = value(payload, ("capability",))
+    changes_dir = resolve_under_root(root, args.changes_dir or "openspec/changes")
+    base = changes_dir / change_name
+    if base.exists() and any(base.iterdir()) and not args.force:
+        raise FileExistsError(f"change directory exists and is not empty; use --force to overwrite helper-managed files: {base}")
+
+    written: list[str] = []
+    write_text_file(base / ".openspec.yaml", render_yaml(payload), force=args.force, written=written)
+    claim_graph = read_json_optional(workflow_base / CLAIM_GRAPH_FILE) if workflow_base else None
+    write_text_file(base / "proposal.md", render_proposal(payload), force=args.force, written=written)
+    write_text_file(base / "design.md", render_design(payload, claim_graph), force=args.force, written=written)
+    write_text_file(base / "tasks.md", render_tasks(payload), force=args.force, written=written)
+    write_text_file(base / "specs" / capability / "spec.md", render_spec(payload), force=args.force, written=written)
+    manifest = build_manifest(change_name, base)
+    manifest_path = base / "source-manifest.json"
+    write_json(manifest_path, manifest)
+    written.append(str(manifest_path))
+    return {"changeDir": str(base), "files": written, "sourceManifest": str(manifest_path)}
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    errors: list[str] = []
+    try:
+        change_name = requested_change_name(args)
+    except ValueError as err:
+        report = json_report("init", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    base = artifact_dir(root, args.artifact_dir, positional_change_name(args))
+    if change_name and not CHANGE_NAME_RE.fullmatch(change_name):
+        errors.append("change name must match ^[a-z0-9][a-z0-9-]*$")
+    if args.capability and not CHANGE_NAME_RE.fullmatch(args.capability):
+        errors.append("--capability must match ^[a-z0-9][a-z0-9-]*$")
+    if errors:
+        report = json_report("init", "invalid_artifact", "usage_error", EXIT_USAGE, errors=errors)
+        dump(report)
+        return EXIT_USAGE
+
+    base.mkdir(parents=True, exist_ok=True)
+    gate_path = base / VALUE_GATE_FILE
+    written: list[str] = []
+    if gate_path.exists() and not args.force:
+        report = json_report(
+            "init",
+            "blocked",
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(gate_path),
+            errors=[f"{VALUE_GATE_FILE} already exists; use --force to replace it"],
+        )
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+
+    gate_payload = default_value_gate(change_name, args.capability, args.goal)
+    write_json(gate_path, gate_payload)
+    written.append(str(gate_path))
+    structured = ensure_structured_artifacts(base, gate_payload, force=args.force)
+    for path in structured.get("files", {}).values():
+        if isinstance(path, str) and path not in written:
+            written.append(path)
+    kernel_path = base / "spec-kernel.md"
+    if args.force or not kernel_path.exists():
+        kernel_path.write_text(SPEC_KERNEL_TEMPLATE)
+        written.append(str(kernel_path))
+    readme_path = base / "README.md"
+    if args.force or not readme_path.exists():
+        readme_path.write_text(README_TEMPLATE)
+        written.append(str(readme_path))
+
+    check_cmd = "scripts/goal-spec-workflow check"
+    gate_cmd = "scripts/goal-spec-workflow gate --pre-spec"
+    write_cmd = "scripts/goal-spec-workflow write-spec"
+    positional = positional_change_name(args)
+    if positional:
+        check_cmd = f"scripts/goal-spec-workflow check {positional}"
+        gate_cmd = f"scripts/goal-spec-workflow gate {positional} --pre-spec"
+        write_cmd = f"scripts/goal-spec-workflow write-spec {positional}"
+    report = json_report(
+        "init",
+        "blocked",
+        "initialized",
+        EXIT_PASS,
+        allowed=False,
+        artifactDir=str(base),
+        valueGateFile=str(gate_path),
+        files=written,
+        nextSteps=[
+            f"Edit {gate_path} and set status to pass or proceed_with_assumptions.",
+            f"Run `{check_cmd}`.",
+            f"Run `{gate_cmd}` before `{write_cmd}`.",
+        ],
+    )
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return EXIT_PASS
+
+
+def cmd_phase(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("phase", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "phase", positional_change_name(args))
+    if error_report is not None:
+        write_json(base / STATUS_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    context = ensure_structured_artifacts(base, payload)
+    state = context.get("workflowState") if isinstance(context.get("workflowState"), dict) else None
+    if state is None:
+        report = json_report("phase", "invalid_artifact", "invalid_artifact", EXIT_INVALID_ARTIFACT, errors=["workflow-state could not be loaded"], artifactDir=str(base))
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+
+    active = str(getattr(args, "active", "") or "").strip()
+    status = str(getattr(args, "status", "") or "active").strip()
+    if status not in PHASE_STATUSES:
+        report = json_report("phase", "invalid_artifact", "invalid_artifact", EXIT_INVALID_ARTIFACT, errors=["--status must be one of: " + ", ".join(PHASE_STATUSES)], artifactDir=str(base))
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+    phases = state.get("phases") if isinstance(state.get("phases"), list) else []
+    target = None
+    for phase in phases:
+        if isinstance(phase, dict) and phase.get("id") == active:
+            target = phase
+            break
+    if target is None:
+        report = json_report("phase", "invalid_artifact", "invalid_artifact", EXIT_INVALID_ARTIFACT, errors=[f"unknown phase: {active}"], artifactDir=str(base))
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+
+    target["status"] = status
+    state["activePhase"] = active
+    state["updatedAt"] = utc_now()
+    write_json(base / WORKFLOW_STATE_FILE, state)
+    report = json_report(
+        "phase",
+        "pass",
+        "updated",
+        EXIT_PASS,
+        artifactDir=str(base),
+        workflowStateFile=str(base / WORKFLOW_STATE_FILE),
+        activePhase=active,
+        phaseStatus=status,
+    )
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return EXIT_PASS
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("check", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "check", positional_change_name(args))
+    if error_report is not None:
+        write_json(base / STATUS_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    report, code = evaluate_gate(payload, "check", base)
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return code
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("gate", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    base = artifact_dir(root, args.artifact_dir, positional_change_name(args))
+    if not args.pre_spec:
+        report = json_report("gate", "usage_error", "usage_error", EXIT_USAGE, errors=["gate requires --pre-spec"])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "gate", positional_change_name(args))
+    if error_report is not None:
+        write_json(base / PRE_SPEC_GATE_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    ack_report, ack_code = apply_acknowledgement(payload, args, base / VALUE_GATE_FILE)
+    if ack_report is not None:
+        write_json(base / PRE_SPEC_GATE_FILE, ack_report)
+        dump(ack_report)
+        return int(ack_code or EXIT_USAGE)
+    report, code = evaluate_gate(payload, "gate", base)
+    write_json(base / PRE_SPEC_GATE_FILE, report)
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return code
+
+
+def cmd_write_spec(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("write-spec", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "write-spec", positional_change_name(args))
+    if error_report is not None:
+        write_json(base / WRITE_SPEC_STATUS_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    ack_report, ack_code = apply_acknowledgement(payload, args, base / VALUE_GATE_FILE)
+    if ack_report is not None:
+        write_json(base / WRITE_SPEC_STATUS_FILE, ack_report)
+        dump(ack_report)
+        return int(ack_code or EXIT_USAGE)
+
+    gate_report, gate_code = evaluate_gate(payload, "write-spec", base)
+    if gate_code != EXIT_PASS:
+        write_json(base / WRITE_SPEC_STATUS_FILE, gate_report)
+        write_json(base / STATUS_FILE, gate_report)
+        dump(gate_report)
+        return gate_code
+
+    try:
+        result = write_spec_package(payload, root, args, workflow_base=base)
+    except Exception as err:  # noqa: BLE001
+        report = json_report(
+            "write-spec",
+            str(gate_report.get("status", "blocked")),
+            "write_failed",
+            EXIT_WRITE_FAILED,
+            artifactDir=str(base),
+            valueGateFile=str(base / VALUE_GATE_FILE),
+            errors=[str(err)],
+        )
+        write_json(base / WRITE_SPEC_STATUS_FILE, report)
+        dump(report)
+        return EXIT_WRITE_FAILED
+
+    report = dict(gate_report)
+    report.update(
+        {
+            "command": "write-spec",
+            "result": "written",
+            "allowed": True,
+            "exitCode": EXIT_PASS,
+            "exitCodeName": EXIT_CODE_NAMES[EXIT_PASS],
+            "writeSpec": result,
+            "generatedAt": utc_now(),
+        }
+    )
+    write_json(base / WRITE_SPEC_STATUS_FILE, report)
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return EXIT_PASS
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = WorkflowArgumentParser(description="Value-gated workflow helper for goal-spec")
+    parser.add_argument("--json", action="store_true", help="emit JSON output (default)")
+    parser.add_argument("--project-root", default=argparse.SUPPRESS, help="target project root")
+    parser.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
+    subparsers = parser.add_subparsers(dest="command", required=True, parser_class=WorkflowArgumentParser)
+
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    common.add_argument("--project-root", default=argparse.SUPPRESS, help="target project root")
+    common.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
+
+    init = subparsers.add_parser("init", parents=[common], help="create .writer-workflow artifacts")
+    init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .writer-workflow/changes/<change-name>/")
+    init.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
+    init.add_argument("--capability", help="kebab-case OpenSpec capability/spec name")
+    init.add_argument("--goal", help="source user goal or intended outcome")
+    init.add_argument("--force", action="store_true", help="replace existing helper artifacts")
+    init.set_defaults(func=cmd_init)
+
+    phase = subparsers.add_parser("phase", parents=[common], help="update or report phase-aware workflow state")
+    phase.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    phase.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
+    phase.add_argument("--active", required=True, help="phase id to set as active")
+    phase.add_argument("--status", choices=PHASE_STATUSES, default="active", help="status to assign to the active phase")
+    phase.set_defaults(func=cmd_phase)
+
+    check = subparsers.add_parser("check", parents=[common], help="validate workflow artifacts and report gate status")
+    check.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    check.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
+    check.set_defaults(func=cmd_check)
+
+    gate = subparsers.add_parser("gate", parents=[common], help="enforce workflow gates")
+    gate.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    gate.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
+    gate.add_argument("--pre-spec", action="store_true", help="enforce the value gate before OpenSpec writing")
+    gate.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
+    gate.add_argument("--acknowledgement", help="acknowledgement rationale required with --acknowledge-assumptions")
+    gate.add_argument("--acknowledged-by", help="identity recorded for assumption acknowledgement")
+    gate.set_defaults(func=cmd_gate)
+
+    write_spec = subparsers.add_parser("write-spec", parents=[common], help="write OpenSpec templates after the pre-spec gate passes")
+    write_spec.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    write_spec.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
+    write_spec.add_argument("--changes-dir", default="openspec/changes", help="OpenSpec changes directory, relative to project root unless absolute")
+    write_spec.add_argument("--force", action="store_true", help="overwrite helper-managed OpenSpec files")
+    write_spec.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
+    write_spec.add_argument("--acknowledgement", help="acknowledgement rationale required with --acknowledge-assumptions")
+    write_spec.add_argument("--acknowledged-by", help="identity recorded for assumption acknowledgement")
+    write_spec.set_defaults(func=cmd_write_spec)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not hasattr(args, "project_root"):
+        args.project_root = "."
+    if not hasattr(args, "artifact_dir"):
+        args.artifact_dir = None
+    return int(args.func(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,22 +1,25 @@
 {
-  "name": "agent-goal-writer",
+  "name": "goal-spec",
   "version": "0.3.0",
-  "description": "Self-contained Pi skill and bundled helpers for writing, reviewing, and validating OpenSpec change packages from a user goal.",
+  "description": "Self-contained Pi skill and bundled helpers for value-gated OpenSpec change packages from a user goal.",
   "license": "MIT",
   "keywords": [
     "pi-package",
-    "agent-skills",
     "openspec",
     "spec-authoring",
     "proposal",
     "design",
     "review",
     "archive-preflight",
-    "change-explainer"
+    "change-explainer",
+    "goal-spec",
+    "agent-skills"
   ],
   "files": [
     "SKILL.md",
     "README.md",
+    "scripts/goal-spec-openspec.py",
+    "scripts/goal-spec-workflow",
     "scripts/agent-goal-writer-openspec.py",
     "scripts/agent-goal-writer-workflow",
     "scripts/check-change-explainer.sh",

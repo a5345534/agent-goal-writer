@@ -38,7 +38,7 @@
   <header>
     <p class="pill">OpenSpec decision-review explainer</p>
     <h1>clarify-value-gated-writer-workflow</h1>
-    <p>此 change 將 agent-goal-writer 明確定義為「會挑戰價值的規格夥伴」：先與使用者釐清與辯論，再經過 pre-spec 品質閘門，最後才寫 OpenSpec。</p>
+    <p>此 change 將 goal-spec 明確定義為「會挑戰價值的規格夥伴」：先與使用者釐清與辯論，再經過 pre-spec 品質閘門，最後才寫 OpenSpec。</p>
   </header>
 
   <nav role="navigation" aria-label="主要導覽">
@@ -59,7 +59,7 @@
       <p>目前 skill 已經說明 discovery、spec kernel、OpenSpec 寫作與驗證，但仍可能被理解為「使用者說什麼就產生規格」。這會讓模糊或價值不足的目標被包裝成看似成熟的 proposal/design/tasks/spec。</p>
       <p>此 change 的核心價值是：在寫 spec 前，讓 writer 先挑戰目標是否值得做、成功訊號是否可驗證、是否有 no-build 或更小範圍的替代方案。</p>
       <button class="copy-button" data-copy="#decision-summary">複製決策摘要</button>
-      <pre id="decision-summary">決策：在 agent-goal-writer 中加入 value-gated workflow。OpenSpec 寫作必須先通過 pre-spec gate，或在使用者明確承認風險後以 proceed_with_assumptions 前進。</pre>
+      <pre id="decision-summary">決策：在 goal-spec 中加入 value-gated workflow。OpenSpec 寫作必須先通過 pre-spec gate，或在使用者明確承認風險後以 proceed_with_assumptions 前進。</pre>
     </section>
 
     <section id="what-changes">
@@ -116,7 +116,7 @@
         <thead><tr><th>Surface</th><th>Impact</th></tr></thead>
         <tbody>
           <tr><td>SKILL.md</td><td>新增 critical collaborator、value challenge、pre-spec gate workflow 說明。</td></tr>
-          <tr><td>scripts/</td><td>新增 agent-goal-writer-workflow helper；既有 openspec-* helpers 不被替換。</td></tr>
+          <tr><td>scripts/</td><td>新增 goal-spec-workflow helper；既有 openspec-* helpers 不被替換。</td></tr>
           <tr><td>.writer-workflow/changes/&lt;change-name&gt;/ artifacts</td><td>新增 workspace-local pre-writing evidence：value-gate、spec-kernel notes、pre-spec gate report、write-spec status；不放入 OpenSpec governed sources。</td></tr>
           <tr><td>OpenSpec package</td><td>proposal/design/tasks/spec 必須保留價值辯論與假設。</td></tr>
         </tbody>
@@ -191,7 +191,7 @@
     <section id="agent-prompts">
       <h2>Copyable agent prompts</h2>
       <div class="grid three">
-        <div class="card"><h3>Implementation agent prompt 實作代理提示</h3><button data-copy="#impl-prompt">複製</button><pre id="impl-prompt">Implement clarify-value-gated-writer-workflow. Update SKILL.md, add scripts/agent-goal-writer-workflow, create workflow artifacts, enforce pre-spec gate before OpenSpec writing, and add tests for blocked/pass/proceed_with_assumptions.</pre></div>
+        <div class="card"><h3>Implementation agent prompt 實作代理提示</h3><button data-copy="#impl-prompt">複製</button><pre id="impl-prompt">Implement clarify-value-gated-writer-workflow. Update SKILL.md, add scripts/goal-spec-workflow, create workflow artifacts, enforce pre-spec gate before OpenSpec writing, and add tests for blocked/pass/proceed_with_assumptions.</pre></div>
         <div class="card"><h3>Review agent prompt 審查代理提示</h3><button data-copy="#review-prompt">複製</button><pre id="review-prompt">Review whether the change prevents premature OpenSpec writing, preserves value challenge outputs, and keeps script checks separate from agent judgment. Verify no existing helper contract is broken.</pre></div>
         <div class="card"><h3>Verification agent prompt 驗證代理提示</h3><button data-copy="#verify-prompt">複製</button><pre id="verify-prompt">Run workflow script fixtures for init/check/gate/write-spec. Confirm blocked cases fail, pass cases proceed, proceed_with_assumptions requires user acknowledgement, and manifest/explainer validation still run.</pre></div>
       </div>

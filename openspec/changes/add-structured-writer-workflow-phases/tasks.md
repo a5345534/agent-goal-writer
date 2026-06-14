@@ -9,7 +9,7 @@
 
 ## 2. Workflow State Schema
 
-- [x] 2.1 Extend `scripts/agent-goal-writer-workflow init <change-name>` to create `workflow-state.json` with default phases and loop guards.
+- [x] 2.1 Extend `scripts/goal-spec-workflow init <change-name>` to create `workflow-state.json` with default phases and loop guards.
 - [x] 2.2 Add or update helpers for reading/writing phase status and active phase.
 - [x] 2.3 Preserve compatibility with existing `value-gate.json` workflows.
 - [x] 2.4 Add migration or warning behavior when existing workflow directories lack `workflow-state.json`.

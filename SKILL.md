@@ -1,10 +1,10 @@
 ---
-name: agent-goal-writer
+name: goal-spec
 description: Self-contained OpenSpec authoring skill that acts as a value-gated critical collaborator, using BMAD-style discovery, constructive disagreement, spec-kernel preservation, and validation gates. Use to challenge/refine a user goal and, when valuable, turn it into proposal.md, design.md, tasks.md, specs/**/spec.md, source-manifest.json, change-explainer.html, and review/archive-readiness checks. Not for converting OpenSpec into /goal DAGs.
 license: MIT
 ---
 
-# Agent Goal Writer
+# Goal Spec
 
 This skill writes **OpenSpec change packages** from a user goal/request.
 
@@ -210,11 +210,11 @@ Resolve `<skill-dir>` to the directory containing this `SKILL.md`. The skill
 ships these helper entrypoints and they use only Python's standard library:
 
 ```bash
-<skill-dir>/scripts/agent-goal-writer-workflow init <change-name> --project-root <project-root> --capability <capability> --goal "<goal>"
-<skill-dir>/scripts/agent-goal-writer-workflow phase <change-name> --active value_challenge --status active --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow check <change-name> --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow write-spec <change-name> --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow init <change-name> --project-root <project-root> --capability <capability> --goal "<goal>"
+<skill-dir>/scripts/goal-spec-workflow phase <change-name> --active value_challenge --status active --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow check <change-name> --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow gate <change-name> --pre-spec --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow write-spec <change-name> --project-root <project-root>
 <skill-dir>/scripts/openspec-propose <change-name> --project-root <project-root> --capability <capability>
 <skill-dir>/scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
 <skill-dir>/scripts/openspec-validate-source-manifest <change-name> --project-root <project-root>
@@ -511,11 +511,11 @@ Use the bundled workflow helper first to materialize workspace-local `.writer-wo
 and check the pre-spec gate, and only then write the starter OpenSpec package:
 
 ```bash
-<skill-dir>/scripts/agent-goal-writer-workflow init <change-name> --project-root <project-root> --capability <capability> --goal "<goal>"
-<skill-dir>/scripts/agent-goal-writer-workflow phase <change-name> --active value_challenge --status active --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow check <change-name> --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow write-spec <change-name> --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow init <change-name> --project-root <project-root> --capability <capability> --goal "<goal>"
+<skill-dir>/scripts/goal-spec-workflow phase <change-name> --active value_challenge --status active --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow check <change-name> --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow gate <change-name> --pre-spec --project-root <project-root>
+<skill-dir>/scripts/goal-spec-workflow write-spec <change-name> --project-root <project-root>
 ```
 
 `gate --pre-spec` must report `pass`, or acknowledged

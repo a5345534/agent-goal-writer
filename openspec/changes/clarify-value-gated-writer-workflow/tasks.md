@@ -10,7 +10,7 @@
 
 ## 2. Workflow Helper Script
 
-- [x] 2.1 Add `scripts/agent-goal-writer-workflow` using only the Python standard library.
+- [x] 2.1 Add `scripts/goal-spec-workflow` using only the Python standard library.
 - [x] 2.2 Implement `init <change-name> --capability <capability>` to create workspace-local `.writer-workflow/changes/<change-name>/` artifacts.
 - [x] 2.3 Implement `check <change-name>` for value-gate artifact completeness.
 - [x] 2.4 Implement `gate <change-name> --pre-spec` to write `pre-spec-gate.json` with `blocked`, `pass`, or `proceed_with_assumptions`.

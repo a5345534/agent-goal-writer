@@ -1,10 +1,10 @@
-# agent-goal-writer
+# goal-spec
 
 Standalone Pi skill folder for writing OpenSpec change packages from a user goal. It includes bundled helper scripts so target workspaces do not need to vendor `openspec/scripts/*` or depend on a neighboring `openspec-workflow` checkout for normal validation.
 
 ## What it provides
 
-`agent-goal-writer` is a self-contained OpenSpec authoring skill. Workspaces may
+`goal-spec` is a self-contained OpenSpec authoring skill. Workspaces may
 load this external skill, but should not copy/own separate OpenSpec writing or
 planning skills for the same workflow. It writes and validates the normal
 OpenSpec artifacts:
@@ -43,13 +43,13 @@ It is for writing the OpenSpec specification/change package itself.
 Load directly:
 
 ```bash
-pi --skill <path-to-agent-goal-writer>
+pi --skill <path-to-goal-spec>
 ```
 
 Install once from GitHub:
 
 ```bash
-pi install git:github.com/a5345534/agent-goal-writer
+pi install git:github.com/a5345534/goal-spec
 ```
 
 After installation, update through Pi package management instead of manually
@@ -58,12 +58,12 @@ editing the installed skill checkout:
 ```bash
 pi update --extensions
 # or update this package explicitly
-pi update git:github.com/a5345534/agent-goal-writer
+pi update git:github.com/a5345534/goal-spec
 ```
 
 Avoid installing with a pinned git ref such as `@v1` or `@<commit>` if you want
 `pi update` to track the latest package revision. Pinned refs are reconciled but
-not moved by `pi update`; use `pi install git:github.com/a5345534/agent-goal-writer@<new-ref>` only when intentionally changing pins.
+not moved by `pi update`; use `pi install git:github.com/a5345534/goal-spec@<new-ref>` only when intentionally changing pins.
 
 Or add it to Pi settings as a skill path/package path when doing local
 contributor development.
@@ -71,7 +71,7 @@ contributor development.
 ## Typical use
 
 ```text
-/skill:agent-goal-writer write an OpenSpec change for <goal>
+/skill:goal-spec write an OpenSpec change for <goal>
 ```
 
 Expected output is an OpenSpec change under:
@@ -82,8 +82,8 @@ openspec/changes/<change-name>/
 
 ## Value-gated workflow helper (new)
 
-`agent-goal-writer` now uses a structured pre-spec workflow before starting OpenSpec
-writing. Use `scripts/agent-goal-writer-workflow` to make value challenge,
+`goal-spec` now uses a structured pre-spec workflow before starting OpenSpec
+writing. Use `scripts/goal-spec-workflow` to make value challenge,
 phase progress, claim preservation, loop guards, and readiness checks explicit,
 recordable, and reviewable.
 
@@ -106,13 +106,13 @@ the skill is installed by Pi:
 
 ```bash
 # Start or refresh workspace-local value-gated workflow state
-scripts/agent-goal-writer-workflow init <change-name> --project-root <target-root> --capability <capability> --goal "<goal>"
-scripts/agent-goal-writer-workflow phase <change-name> --active value_challenge --status active --project-root <target-root>
-scripts/agent-goal-writer-workflow check <change-name> --project-root <target-root>
-scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --project-root <target-root>
-scripts/agent-goal-writer-workflow write-spec <change-name> --project-root <target-root>
+scripts/goal-spec-workflow init <change-name> --project-root <target-root> --capability <capability> --goal "<goal>"
+scripts/goal-spec-workflow phase <change-name> --active value_challenge --status active --project-root <target-root>
+scripts/goal-spec-workflow check <change-name> --project-root <target-root>
+scripts/goal-spec-workflow gate <change-name> --pre-spec --project-root <target-root>
+scripts/goal-spec-workflow write-spec <change-name> --project-root <target-root>
 # optional acknowledgement path when value clarity is partial
-scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --acknowledge-assumptions --acknowledgement "<why proceed despite open risks>" --project-root <target-root>
+scripts/goal-spec-workflow gate <change-name> --pre-spec --acknowledge-assumptions --acknowledgement "<why proceed despite open risks>" --project-root <target-root>
 
 # Existing OpenSpec helpers
 scripts/openspec-propose <change-name> --project-root <target-root> --capability <capability>
@@ -146,7 +146,7 @@ scripts/check-change-explainer.sh <change-name> --project-root <target-root> --r
 
 ## Relationship to nearby projects
 
-- `agent-goal-writer` owns the prompt-level workflow and the fallback automation
+- `goal-spec` owns the prompt-level workflow and the fallback automation
   needed to scaffold, refresh manifests, validate explainers, and run archive
   preflight checks.
 - External workflow packages or project-local `openspec/scripts/*` are not part

@@ -2,7 +2,7 @@
 
 ## Why
 
-The current value-gated writer workflow gives `agent-goal-writer` a useful pre-spec checkpoint, but the state model is still mostly a single gate artifact. That is enough to block obviously incomplete goals, but it is not enough to make a long clarification/value-debate session reliably resumable, inspectable, or self-correcting.
+The current value-gated writer workflow gives `goal-spec` a useful pre-spec checkpoint, but the state model is still mostly a single gate artifact. That is enough to block obviously incomplete goals, but it is not enough to make a long clarification/value-debate session reliably resumable, inspectable, or self-correcting.
 
 The Omnigent review surfaced several reusable architecture patterns that fit this repo without turning the writer into a full autonomous ReAct framework:
 
@@ -25,8 +25,8 @@ This change specifies how to evolve the writer workflow from a flat value gate i
 
 ## Impact
 
-- Affected specs: `agent-goal-writer-workflow`
-- Affected modules/repos: `agent-goal-writer` skill instructions, `scripts/agent-goal-writer-workflow`, tests, README, and OpenSpec closeout artifacts
+- Affected specs: `goal-spec-workflow`
+- Affected modules/repos: `goal-spec` skill instructions, `scripts/goal-spec-workflow`, tests, README, and OpenSpec closeout artifacts
 - Affected APIs/events/data: workspace-local workflow JSON schema under `.writer-workflow/changes/<change-name>/`; no public API or event contract
 - Migration/deployment impact: Existing `value-gate.json` workflows remain readable; new fields are additive and should default safely.
 - User-visible impact: Users get more stable clarification sessions, fewer repeated questions, clearer value-challenge rationale, and better preservation of decisions into OpenSpec.
@@ -34,7 +34,7 @@ This change specifies how to evolve the writer workflow from a flat value gate i
 ## Non-Goals
 
 - Do not adopt Omnigent as a dependency.
-- Do not implement a full autonomous ReAct loop or tool-calling agent inside `agent-goal-writer`.
+- Do not implement a full autonomous ReAct loop or tool-calling agent inside `goal-spec`.
 - Do not replace Pi/goal-planner model routing with an internal LLM router.
 - Do not make `.writer-workflow/` authoritative over OpenSpec markdown/spec files.
 - Do not introduce plugin loading or checksum enforcement in this change; registry-style extension points are enough.
