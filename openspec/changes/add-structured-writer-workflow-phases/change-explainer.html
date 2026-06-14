@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="openspec-explainer-mode" content="decision-review">
+  <title>add-structured-writer-workflow-phases 決策審查</title>
+  <style>
+    :root{--bg:#f8fafc;--card:#fff;--ink:#172033;--muted:#64748b;--line:#dbe4ee;--accent:#2563eb;--ok:#047857;--warn:#b45309;--danger:#b91c1c;--violet:#6d28d9}*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);line-height:1.62;overflow-wrap:anywhere}header{padding:2rem clamp(1rem,4vw,4rem);background:linear-gradient(135deg,#0f172a,#2563eb);color:#fff}header p{max-width:72rem}nav{position:sticky;top:0;z-index:3;display:flex;gap:.45rem;flex-wrap:wrap;padding:.7rem clamp(1rem,4vw,4rem);background:rgba(255,255,255,.96);border-bottom:1px solid var(--line)}nav a{color:var(--accent);text-decoration:none;padding:.35rem .55rem;border-radius:.55rem}nav a:hover{background:#eff6ff}main{width:min(1180px,100%);margin:0 auto;padding:1.1rem}section{margin:1rem 0;padding:1.2rem;background:var(--card);border:1px solid var(--line);border-radius:1rem;box-shadow:0 8px 20px rgba(15,23,42,.05)}h1,h2,h3{line-height:1.25}h2{margin-top:0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}.three{grid-template-columns:repeat(3,minmax(0,1fr))}.card{min-width:0;padding:1rem;border:1px solid var(--line);border-radius:.85rem;background:#fbfdff}.pill{display:inline-block;padding:.2rem .55rem;border-radius:999px;background:#dbeafe;color:#1d4ed8;font-size:.85rem}.muted{color:var(--muted)}pre{max-width:100%;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:1rem;border-radius:.8rem;background:#111827;color:#e5e7eb}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}button{cursor:pointer;border:1px solid var(--line);background:white;border-radius:.6rem;padding:.45rem .7rem}button:hover{border-color:var(--accent);color:var(--accent)}table{width:100%;border-collapse:collapse}th,td{padding:.65rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}.risk[data-risk="high"]{border-color:#fecaca;background:#fff7f7}.risk[data-risk="medium"]{border-color:#fed7aa;background:#fffaf0}svg{width:100%;height:auto;border:1px solid var(--line);border-radius:.8rem;background:#fff}@media(max-width:760px){main{padding:.75rem}section{padding:.9rem}.grid,.three{grid-template-columns:minmax(0,1fr)}nav{position:static}table{display:block;overflow:auto}}
+  </style>
+</head>
+<body>
+  <header>
+    <p class="pill">OpenSpec decision-review explainer</p>
+    <h1>add-structured-writer-workflow-phases</h1>
+    <p>此 change 將 writer workflow 從單一 value gate 擴展為 phase-aware、可恢復、可檢查的 workspace 能力，借鑑 Omnigent 的 phase planner、extract/reflect/recover、reasoning graph 與 loop guard 概念，但不引入 Omnigent 依賴。</p>
+  </header>
+  <nav role="navigation" aria-label="主要導覽">
+    <a href="#why">Why</a><a href="#what-changes">What</a><a href="#before-after">Before/After</a><a href="#flow">Flow</a><a href="#decision-points">決策</a><a href="#implementation-slices">實作切片</a><a href="#verification-plan">驗證</a><a href="#risk-register">風險</a><a href="#agent-prompts">Prompts</a>
+  </nav>
+  <main>
+    <section id="why">
+      <h2>為什麼要做</h2>
+      <p>現有 value-gated workflow 已能阻止明顯不完整的目標直接寫 OpenSpec，但單一 gate artifact 不足以表示長對話中的 phase progress、重複問題、價值反思、恢復建議與 load-bearing claim preservation。</p>
+      <p>此 change 的核心是：保留 workspace-local 狀態來支撐對話與檢查，同時讓 OpenSpec markdown/spec 繼續作為唯一 governed source of truth。</p>
+      <button class="copy-button" data-copy="#decision-summary">複製決策摘要</button>
+      <pre id="decision-summary">決策：新增 phase-aware workflow-state、extract/reflect/recover pipeline、claim graph preservation、loop guards、registry-style organization。Omnigent 僅作為設計靈感，不新增依賴、不搬完整 ReAct framework。</pre>
+    </section>
+
+    <section id="what-changes">
+      <h2>What Changes</h2>
+      <div class="grid three">
+        <div class="card"><h3>Phase-aware state</h3><p>新增 <code>workflow-state.json</code>，追蹤 intake、value challenge、clarification、spec kernel、pre-spec gate、OpenSpec write、validation。</p></div>
+        <div class="card"><h3>Extract / Reflect / Recover</h3><p>把 user/source input 轉成 claims，反思 value/scope/risk/verification gaps，並輸出一個下一步建議。</p></div>
+        <div class="card"><h3>Claim graph</h3><p>追蹤 load-bearing claims 是否落到 proposal/design/tasks/spec，未保存則成為 gate blocker。</p></div>
+      </div>
+    </section>
+
+    <section id="before-after">
+      <h2>Before / After</h2>
+      <div class="grid">
+        <div class="card"><h3>變更前 Before</h3><ul><li>主要依賴 <code>value-gate.json</code> 判斷 pre-spec readiness。</li><li>phase progress、recovery 建議與重複問題沒有完整結構。</li><li>load-bearing preservation 主要靠人工與 design notes。</li></ul></div>
+        <div class="card"><h3>變更後 After</h3><ul><li><code>.writer-workflow/changes/&lt;change-name&gt;/workflow-state.json</code> 可 resume phase progress。</li><li>extract/reflect/recover 讓價值挑戰與下一步更可檢查。</li><li><code>claim-graph.json</code> 可阻擋未保存的 load-bearing claims。</li></ul></div>
+      </div>
+    </section>
+
+    <section id="flow">
+      <h2>架構與流程</h2>
+      <svg viewBox="0 0 1080 280" role="img" aria-label="structured writer workflow phases">
+        <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/></marker></defs>
+        <g font-family="system-ui" font-size="14" text-anchor="middle">
+          <rect x="20" y="82" width="110" height="68" rx="14" fill="#eff6ff" stroke="#2563eb"/><text x="75" y="110">INTAKE</text><text x="75" y="130" font-size="12">raw goal</text>
+          <rect x="155" y="82" width="145" height="68" rx="14" fill="#fff7ed" stroke="#b45309"/><text x="227" y="106">VALUE</text><text x="227" y="128">CHALLENGE</text>
+          <rect x="325" y="82" width="130" height="68" rx="14" fill="#f0fdf4" stroke="#047857"/><text x="390" y="110">CLARIFY</text><text x="390" y="130" font-size="12">scope/risk</text>
+          <rect x="480" y="82" width="130" height="68" rx="14" fill="#faf5ff" stroke="#6d28d9"/><text x="545" y="108">SPEC</text><text x="545" y="130">KERNEL</text>
+          <rect x="635" y="64" width="155" height="104" rx="14" fill="#fef2f2" stroke="#b91c1c"/><text x="712" y="98">PRE-SPEC</text><text x="712" y="120">GATE</text><text x="712" y="142" font-size="12">claim blockers</text>
+          <rect x="815" y="82" width="120" height="68" rx="14" fill="#ecfeff" stroke="#0891b2"/><text x="875" y="110">WRITE</text><text x="875" y="130">OPENSPEC</text>
+          <rect x="960" y="82" width="100" height="68" rx="14" fill="#f8fafc" stroke="#64748b"/><text x="1010" y="110">VALIDATE</text>
+        </g>
+        <g stroke="#2563eb" stroke-width="3" marker-end="url(#arrow)"><line x1="130" y1="116" x2="150" y2="116"/><line x1="300" y1="116" x2="320" y2="116"/><line x1="455" y1="116" x2="475" y2="116"/><line x1="610" y1="116" x2="630" y2="116"/><line x1="790" y1="116" x2="810" y2="116"/><line x1="935" y1="116" x2="955" y2="116"/></g>
+        <rect x="180" y="195" width="720" height="52" rx="14" fill="#f8fafc" stroke="#dbe4ee"/><text x="540" y="218" text-anchor="middle" font-size="14">Extract → Reflect → Recover + Claim Graph + Loop Guards operate across phases</text><text x="540" y="238" text-anchor="middle" font-size="12" fill="#64748b">workspace-local evidence; OpenSpec markdown/spec remains authoritative</text>
+      </svg>
+    </section>
+
+    <section id="affected-surfaces">
+      <h2>受影響面</h2>
+      <table><thead><tr><th>Surface</th><th>Impact</th></tr></thead><tbody>
+        <tr><td><code>scripts/agent-goal-writer-workflow</code></td><td>新增 phase state、pipeline artifacts、claim graph、loop guards、registry-style data structures。</td></tr>
+        <tr><td><code>.writer-workflow/changes/&lt;change-name&gt;/</code></td><td>新增 workflow-state、extracted-claims、reflection-report、recovery-actions、claim-graph。</td></tr>
+        <tr><td><code>SKILL.md</code> / <code>README.md</code></td><td>描述 structured workflow phases 與 source-of-truth boundary。</td></tr>
+        <tr><td>OpenSpec package</td><td>保存 load-bearing workflow conclusions；不把 workflow state 當權威來源。</td></tr>
+      </tbody></table>
+    </section>
+
+    <section id="scope-boundaries">
+      <h2>Scope boundaries</h2>
+      <div class="grid"><div class="card"><h3>包含</h3><p>phase-aware state、extract/reflect/recover、claim graph、loop guards、registry-style internal organization。</p></div><div class="card"><h3>不包含</h3><p>不導入 Omnigent dependency、不實作 ReAct loop、不重做 LLM router、不加 plugin/checksum system。</p></div></div>
+    </section>
+
+    <section id="decision-points">
+      <h2>Decision Points 決策點</h2>
+      <div class="card" data-decision="phase-state"><h3>D1. 新增 workflow-state.json</h3><p><strong>Recommendation:</strong> 使用 phase/step/status/loopGuard 結構，保留 value-gate 相容。</p><p><strong>Trade-off:</strong> 狀態較多，但能 resume 與測試。</p><p><strong>Confidence:</strong> 高。</p></div>
+      <div class="card" data-decision="claim-graph"><h3>D2. 新增 claim graph</h3><p><strong>Recommendation:</strong> 對 load-bearing claims 建 preservation map，未保存則 gate blocker。</p><p><strong>Trade-off:</strong> 需要維護 claims，但能降低規格遺漏。</p><p><strong>Confidence:</strong> 中高。</p></div>
+      <div class="card" data-decision="no-omnigent-dependency"><h3>D3. 不導入 Omnigent dependency</h3><p><strong>Recommendation:</strong> 借鑑模式，不複製 runtime 或依賴。</p><p><strong>Trade-off:</strong> 需要自行實作小型版本，但保持 skill self-contained。</p><p><strong>Confidence:</strong> 高。</p></div>
+    </section>
+
+    <section id="implementation-slices">
+      <h2>Implementation slices 實作切片</h2>
+      <div class="grid three">
+        <div class="card"><h3>Slice 1：State schema</h3><p>新增 workflow-state.json 與 phase transition helpers。Acceptance：init 建立所有新 artifacts。</p></div>
+        <div class="card"><h3>Slice 2：Pipeline</h3><p>新增 extracted-claims、reflection-report、recovery-actions。Acceptance：recovery 恆只輸出一個 next action。</p></div>
+        <div class="card"><h3>Slice 3：Claim graph + guards</h3><p>新增 claim preservation blocker 與 loop limits。Acceptance：未保存 load-bearing claim 會阻擋 gate。</p></div>
+      </div>
+    </section>
+
+    <section id="verification-plan">
+      <h2>Verification plan 驗證計畫</h2>
+      <ul><li><code>init &lt;change-name&gt;</code> 建立 workflow-state 與 pipeline artifacts。</li><li><code>check</code> 報告 active phase 與 missing fields。</li><li>重複問題達上限時產生 fallback recommendation。</li><li>unpreserved load-bearing claim 使 pre-spec gate blocked。</li><li>執行 <code>scripts/test-workflow</code>、manifest validator、decision-review explainer validator。</li></ul>
+    </section>
+
+    <section id="risk-register">
+      <h2>Risk register 風險清單</h2>
+      <p><button data-filter="high-risk">高風險篩選 high-risk filter</button> <button data-filter="all">顯示全部</button></p>
+      <div class="grid"><div class="card risk" data-risk="medium"><h3>helper 過度複雜</h3><p>緩解：只借鑑小型資料結構，不導入 ReAct loop。</p></div><div class="card risk" data-risk="medium"><h3>deterministic extraction 遺漏語意</h3><p>緩解：標示為 advisory，可由 agent 修正與補 assumption。</p></div><div class="card risk" data-risk="high"><h3>workflow state 被誤認為權威來源</h3><p>緩解：文件與 spec 明確規定 OpenSpec markdown/spec 才是 source of truth。</p></div><div class="card risk" data-risk="low"><h3>loop guard 太早中止</h3><p>緩解：保留 configurable defaults 與 fallback path。</p></div></div>
+    </section>
+
+    <section id="rollout">
+      <h2>Rollout / rollback</h2>
+      <p>採 additive rollout：保留 <code>value-gate.json</code>，新增 <code>workflow-state.json</code> 與 pipeline artifacts。若新狀態造成摩擦，可暫時只使用 value-gate compatibility path，但 claim preservation 與 loop guard 應保留為下一輪目標。</p>
+    </section>
+
+    <section id="current-status">
+      <h2>Current status</h2>
+      <p>狀態：implementation complete。workflow helper、測試、SKILL/README 與 OpenSpec closeout 已更新；此 explainer 只是 review companion，權威來源仍是 proposal/design/tasks/spec。</p>
+    </section>
+
+    <section id="agent-prompts">
+      <h2>Copyable agent prompts</h2>
+      <div class="grid three"><div class="card"><h3>Implementation agent prompt 實作代理提示</h3><button data-copy="#impl-prompt">複製</button><pre id="impl-prompt">Implement add-structured-writer-workflow-phases. Add workflow-state.json, extract/reflect/recover artifacts, claim-graph preservation checks, loop guards, registry-style organization, tests, README/SKILL updates, and OpenSpec validation.</pre></div><div class="card"><h3>Review agent prompt 審查代理提示</h3><button data-copy="#review-prompt">複製</button><pre id="review-prompt">Review whether the implementation borrows Omnigent patterns without adding dependencies, keeps .writer-workflow workspace-local, preserves load-bearing claims in OpenSpec, and prevents repeated clarification/challenge loops.</pre></div><div class="card"><h3>Verification agent prompt 驗證代理提示</h3><button data-copy="#verify-prompt">複製</button><pre id="verify-prompt">Run workflow fixture tests for phase state, extract/reflect/recover outputs, claim graph blockers, loop guards, manifest validation, and strict decision-review explainer validation.</pre></div></div>
+    </section>
+
+    <section id="task-json-export">
+      <h2>Task JSON export 任務 JSON</h2>
+      <p><button data-copy="#task-json">複製任務 JSON</button></p>
+      <script type="application/json" id="task-json">{"change":"add-structured-writer-workflow-phases","slices":[{"id":"state-schema","acceptance":"init creates workflow-state and phase defaults"},{"id":"pipeline","acceptance":"recovery recommends exactly one next action"},{"id":"claim-guards","acceptance":"unpreserved load-bearing claims block pre-spec gate"}]}</script>
+    </section>
+  </main>
+  <script>
+    document.querySelectorAll('[data-copy]').forEach((button)=>{button.addEventListener('click',async()=>{const target=document.querySelector(button.getAttribute('data-copy'));const text=target?target.textContent.trim():'';if(navigator.clipboard)await navigator.clipboard.writeText(text);const old=button.textContent;button.textContent='已複製';setTimeout(()=>button.textContent=old,900)})});
+    document.querySelectorAll('[data-filter]').forEach((button)=>{button.addEventListener('click',()=>{const mode=button.getAttribute('data-filter');document.querySelectorAll('.risk').forEach((card)=>{card.style.display=(mode==='all'||card.getAttribute('data-risk')==='high')?'':'none'})})});
+  </script>
+</body>
+</html>

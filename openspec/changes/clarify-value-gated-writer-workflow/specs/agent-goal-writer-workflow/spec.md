@@ -42,40 +42,41 @@ Before a goal is treated as ready for spec-kernel finalization, the writer SHALL
 - **WHEN** the writer reports the next step
 - **THEN** the writer SHALL recommend continued clarification, discovery, prototype, or no-build instead of immediately writing OpenSpec artifacts.
 
-### Requirement: Stage-based workflow artifacts
+### Requirement: Workspace-level workflow artifacts
 
-The workflow SHALL maintain local stage artifacts for intake, value challenge, clarification, spec kernel, and pre-spec review before OpenSpec writing. These artifacts SHALL be stored under `openspec/changes/<change-name>/.writer-workflow/` for the active change.
+The workflow SHALL maintain workspace-local artifacts for value challenge, spec kernel notes, gate reports, and write-spec status before OpenSpec writing. These artifacts SHALL be stored under `.writer-workflow/changes/<change-name>/` for the active change and SHALL NOT be treated as authoritative OpenSpec sources.
 
 #### Scenario: Workflow initialization creates artifacts
 
 - **GIVEN** a change name and capability name
 - **WHEN** `scripts/agent-goal-writer-workflow init <change-name> --capability <capability>` runs
-- **THEN** the workflow SHALL create `.writer-workflow/workflow-state.json`
-- **AND** it SHALL create templates for `intake.md`, `value-challenge.md`, `clarification.md`, `spec-kernel.json`, and `pre-spec-review.json`.
+- **THEN** the workflow SHALL create `.writer-workflow/changes/<change-name>/value-gate.json`
+- **AND** it SHALL create `.writer-workflow/changes/<change-name>/spec-kernel.md`
+- **AND** it SHALL create `.writer-workflow/changes/<change-name>/status.json`.
 
-#### Scenario: Stage checks report missing evidence
+#### Scenario: Artifact checks report missing evidence
 
-- **GIVEN** a stage artifact is missing required fields
-- **WHEN** `scripts/agent-goal-writer-workflow check <change-name> --stage <stage>` runs
+- **GIVEN** the value-gate artifact is missing required pre-spec fields
+- **WHEN** `scripts/agent-goal-writer-workflow check <change-name>` runs
 - **THEN** the command SHALL report the missing fields
 - **AND** it SHALL return a non-zero exit code.
 
 ### Requirement: Pre-spec quality gate
 
-The workflow SHALL run a pre-spec quality gate before OpenSpec writing. The gate SHALL produce `pre-spec-review.json` with status `blocked`, `pass`, or `proceed_with_assumptions`. OpenSpec writing SHALL NOT start when the latest gate status is `blocked` or missing.
+The workflow SHALL run a pre-spec quality gate before OpenSpec writing. The gate SHALL produce `.writer-workflow/changes/<change-name>/pre-spec-gate.json` with status `blocked`, `pass`, or `proceed_with_assumptions`. OpenSpec writing SHALL NOT start when the latest gate status is `blocked` or missing.
 
 #### Scenario: Gate blocks untestable goals
 
 - **GIVEN** the spec kernel lacks a testable success signal
 - **WHEN** `scripts/agent-goal-writer-workflow gate <change-name> --pre-spec` runs
-- **THEN** `pre-spec-review.json` SHALL report status `blocked`
+- **THEN** `pre-spec-gate.json` SHALL report status `blocked`
 - **AND** the blockers SHALL include the missing or untestable success signal.
 
 #### Scenario: Gate passes sufficiently clear goals
 
 - **GIVEN** the workflow artifacts define the problem, affected actor, value case, no-build alternative, smaller-scope alternative, testable success signal, non-goals, assumptions, and no unresolved blocker questions
 - **WHEN** the pre-spec gate runs
-- **THEN** `pre-spec-review.json` SHALL report status `pass`
+- **THEN** `pre-spec-gate.json` SHALL report status `pass`
 - **AND** OpenSpec writing MAY proceed.
 
 ### Requirement: Proceed with assumptions path

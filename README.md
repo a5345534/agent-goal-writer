@@ -46,13 +46,27 @@ Load directly:
 pi --skill <path-to-agent-goal-writer>
 ```
 
-Or install/load from GitHub after publication:
+Install once from GitHub:
 
 ```bash
 pi install git:github.com/a5345534/agent-goal-writer
 ```
 
-Or add it to Pi settings as a skill path/package path.
+After installation, update through Pi package management instead of manually
+editing the installed skill checkout:
+
+```bash
+pi update --extensions
+# or update this package explicitly
+pi update git:github.com/a5345534/agent-goal-writer
+```
+
+Avoid installing with a pinned git ref such as `@v1` or `@<commit>` if you want
+`pi update` to track the latest package revision. Pinned refs are reconciled but
+not moved by `pi update`; use `pi install git:github.com/a5345534/agent-goal-writer@<new-ref>` only when intentionally changing pins.
+
+Or add it to Pi settings as a skill path/package path when doing local
+contributor development.
 
 ## Typical use
 
@@ -68,8 +82,9 @@ openspec/changes/<change-name>/
 
 ## Value-gated workflow helper (new)
 
-`agent-goal-writer` now uses a pre-spec value gate before starting OpenSpec
-writing. Use `scripts/agent-goal-writer-workflow` to make this check explicit,
+`agent-goal-writer` now uses a structured pre-spec workflow before starting OpenSpec
+writing. Use `scripts/agent-goal-writer-workflow` to make value challenge,
+phase progress, claim preservation, loop guards, and readiness checks explicit,
 recordable, and reviewable.
 
 Use this helper when:
@@ -90,13 +105,14 @@ Run these from the skill directory, or resolve them relative to `SKILL.md` when
 the skill is installed by Pi:
 
 ```bash
-# Start or refresh local value-gated workflow state
-scripts/agent-goal-writer-workflow init --project-root <target-root> --change-name <change-name> --capability <capability> --goal "<goal>"
-scripts/agent-goal-writer-workflow check --project-root <target-root>
-scripts/agent-goal-writer-workflow gate --pre-spec --project-root <target-root>
-scripts/agent-goal-writer-workflow write-spec --project-root <target-root>
+# Start or refresh workspace-local value-gated workflow state
+scripts/agent-goal-writer-workflow init <change-name> --project-root <target-root> --capability <capability> --goal "<goal>"
+scripts/agent-goal-writer-workflow phase <change-name> --active value_challenge --status active --project-root <target-root>
+scripts/agent-goal-writer-workflow check <change-name> --project-root <target-root>
+scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --project-root <target-root>
+scripts/agent-goal-writer-workflow write-spec <change-name> --project-root <target-root>
 # optional acknowledgement path when value clarity is partial
-scripts/agent-goal-writer-workflow gate --pre-spec --acknowledge-assumptions --acknowledgement "<why proceed despite open risks>" --project-root <target-root>
+scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --acknowledge-assumptions --acknowledgement "<why proceed despite open risks>" --project-root <target-root>
 
 # Existing OpenSpec helpers
 scripts/openspec-propose <change-name> --project-root <target-root> --capability <capability>
@@ -106,8 +122,17 @@ scripts/openspec-validate-explainer <change-name> --project-root <target-root> -
 scripts/openspec-archive-preflight <change-name> --project-root <target-root> --require-decision-review
 ```
 
-The workflow helper creates `.writer-workflow/` artifacts and emits JSON status for
-`blocked`, `pass`, and `proceed_with_assumptions`. Exit codes are stable:
+The workflow helper creates workspace-local `.writer-workflow/changes/<change-name>/` artifacts, including:
+
+- `value-gate.json`
+- `workflow-state.json`
+- `extracted-claims.json`
+- `reflection-report.json`
+- `recovery-actions.json`
+- `claim-graph.json`
+- `pre-spec-gate.json` / `write-spec-status.json`
+
+It emits JSON status for `blocked`, `pass`, and `proceed_with_assumptions`. Exit codes are stable:
 `0` pass, `20` blocked, `30` acknowledgement required, `40` invalid artifact,
 `50` write failed, and `64` usage error. `proceed_with_assumptions` requires an
 explicit acknowledgement before `gate --pre-spec` or `write-spec` can return

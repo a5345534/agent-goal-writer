@@ -470,6 +470,196 @@ print('OK')
     return $ok
 }
 
+test_positional_change_uses_workspace_changes_dir() {
+    local tmp
+    tmp=$(mktemp -d)
+    local gate_dir="$tmp/.writer-workflow/changes/positional-test"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" init positional-test --project-root "$tmp" --capability "positional-cap" --goal "Positional test." 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "positional init exit" || ok=1
+    assert_json_field "$out" "status" "blocked" "status" || ok=1
+    [[ -f "$gate_dir/value-gate.json" ]] || { printf "\n    ${RED}missing per-change value-gate.json${NC}\n"; ok=1; }
+    [[ -f "$gate_dir/spec-kernel.md" ]] || { printf "\n    ${RED}missing per-change spec-kernel.md${NC}\n"; ok=1; }
+    [[ -f "$gate_dir/status.json" ]] || { printf "\n    ${RED}missing per-change status.json${NC}\n"; ok=1; }
+
+    filled_gate_pass "$tmp" "positional-test" "positional-cap" > "$gate_dir/value-gate.json"
+
+    set +e
+    out=$("$WORKFLOW" check positional-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "positional check exit" || ok=1
+    assert_json_field "$out" "status" "pass" "check status" || ok=1
+
+    set +e
+    out=$("$WORKFLOW" gate positional-test --pre-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "positional gate exit" || ok=1
+    [[ -f "$gate_dir/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing per-change pre-spec-gate.json${NC}\n"; ok=1; }
+
+    set +e
+    out=$("$WORKFLOW" write-spec positional-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "positional write-spec exit" || ok=1
+    [[ -f "$tmp/openspec/changes/positional-test/proposal.md" ]] || { printf "\n    ${RED}missing generated proposal.md${NC}\n"; ok=1; }
+    [[ -f "$gate_dir/write-spec-status.json" ]] || { printf "\n    ${RED}missing per-change write-spec-status.json${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+
+test_structured_artifacts_created() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.writer-workflow/changes/structured-test"
+    "$WORKFLOW" init structured-test --project-root "$tmp" --capability "structured-cap" --goal "Structured test." > /dev/null 2>&1
+    local ok=0
+    [[ -f "$dir/workflow-state.json" ]] || { printf "\n    ${RED}missing workflow-state.json${NC}\n"; ok=1; }
+    [[ -f "$dir/extracted-claims.json" ]] || { printf "\n    ${RED}missing extracted-claims.json${NC}\n"; ok=1; }
+    [[ -f "$dir/reflection-report.json" ]] || { printf "\n    ${RED}missing reflection-report.json${NC}\n"; ok=1; }
+    [[ -f "$dir/recovery-actions.json" ]] || { printf "\n    ${RED}missing recovery-actions.json${NC}\n"; ok=1; }
+    [[ -f "$dir/claim-graph.json" ]] || { printf "\n    ${RED}missing claim-graph.json${NC}\n"; ok=1; }
+    python3 -c "
+import json
+from pathlib import Path
+d=Path('$dir')
+state=json.load(open(d/'workflow-state.json'))
+assert state['schemaVersion']=='1.1'
+assert state['activePhase']=='intake'
+assert {'intake','value_challenge','clarification','spec_kernel','pre_spec_gate','openspec_write','validation'} <= {p['id'] for p in state['phases']}
+recovery=json.load(open(d/'recovery-actions.json'))
+assert recovery['recommendedAction'] in {'ask-one-question','no-build','smaller-scope','proceed-with-assumptions','block-high-stakes','proceed-to-gate'}
+claims=json.load(open(d/'claim-graph.json'))
+assert claims['claims'] == []
+" > /dev/null 2>&1 || { printf "\n    ${RED}structured artifact schema invalid${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+
+test_phase_command_updates_active_phase() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.writer-workflow/changes/phase-test"
+    "$WORKFLOW" init phase-test --project-root "$tmp" --capability "phase-cap" --goal "Phase test." > /dev/null 2>&1
+    local out rc
+    set +e
+    out=$("$WORKFLOW" phase phase-test --active value_challenge --status active --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "phase update exit" || ok=1
+    assert_json_field "$out" "activePhase" "value_challenge" "phase active" || ok=1
+    assert_json_field "$out" "phaseStatus" "active" "phase status" || ok=1
+    python3 -c "
+import json
+from pathlib import Path
+state=json.load(open(Path('$dir')/'workflow-state.json'))
+assert state['activePhase']=='value_challenge'
+phase=[p for p in state['phases'] if p['id']=='value_challenge'][0]
+assert phase['status']=='active'
+" > /dev/null 2>&1 || { printf "\n    ${RED}phase state not updated${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+
+test_independent_change_state() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir_a="$tmp/.writer-workflow/changes/change-a"
+    local dir_b="$tmp/.writer-workflow/changes/change-b"
+    "$WORKFLOW" init change-a --project-root "$tmp" --capability "cap-a" --goal "A." > /dev/null 2>&1
+    "$WORKFLOW" init change-b --project-root "$tmp" --capability "cap-b" --goal "B." > /dev/null 2>&1
+    filled_gate_pass "$tmp" "change-a" "cap-a" > "$dir_a/value-gate.json"
+    local out_a out_b rc_a rc_b
+    set +e
+    out_a=$("$WORKFLOW" check change-a --project-root "$tmp" 2>&1)
+    rc_a=$?
+    out_b=$("$WORKFLOW" check change-b --project-root "$tmp" 2>&1)
+    rc_b=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc_a" "change-a check exit" || ok=1
+    assert_json_field "$out_a" "status" "pass" "change-a status" || ok=1
+    assert_exit 20 "$rc_b" "change-b check exit" || ok=1
+    assert_json_field "$out_b" "status" "blocked" "change-b status" || ok=1
+    [[ -f "$dir_b/value-gate.json" ]] || { printf "\n    ${RED}change-b state missing${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+
+test_claim_graph_blocks_gate() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.writer-workflow/changes/claim-block"
+    "$WORKFLOW" init claim-block --project-root "$tmp" --capability "claim-cap" --goal "Claim block." > /dev/null 2>&1
+    filled_gate_pass "$tmp" "claim-block" "claim-cap" > "$dir/value-gate.json"
+    python3 -c "
+import json
+from pathlib import Path
+d=Path('$dir')
+claim_graph={
+  'schemaVersion':'1.0',
+  'changeName':'claim-block',
+  'claims':[{'id':'claim-001','text':'Important value claim','loadBearing':True,'status':'unpreserved','destinations':[]}],
+  'edges':[],
+}
+(d/'claim-graph.json').write_text(json.dumps(claim_graph))
+" >/dev/null
+    local out rc
+    set +e
+    out=$("$WORKFLOW" gate claim-block --pre-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 20 "$rc" "claim graph gate exit" || ok=1
+    assert_json_field "$out" "status" "blocked" "claim graph status" || ok=1
+    echo "$out" | grep -q "claim graph: load-bearing claim claim-001 is unpreserved" \
+        || { printf "\n    ${RED}claim graph blocker missing${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+
+test_loop_guard_blocks_gate() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.writer-workflow/changes/loop-block"
+    "$WORKFLOW" init loop-block --project-root "$tmp" --capability "loop-cap" --goal "Loop block." > /dev/null 2>&1
+    filled_gate_pass "$tmp" "loop-block" "loop-cap" > "$dir/value-gate.json"
+    python3 -c "
+import json
+from pathlib import Path
+p=Path('$dir')/'workflow-state.json'
+state=json.load(open(p))
+state['loopGuards']['repeatedQuestionHashes']=['same','same']
+p.write_text(json.dumps(state))
+" >/dev/null
+    local out rc
+    set +e
+    out=$("$WORKFLOW" gate loop-block --pre-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 20 "$rc" "loop guard gate exit" || ok=1
+    assert_json_field "$out" "status" "blocked" "loop guard status" || ok=1
+    assert_json_field "$out" "recoveryAction" "proceed-with-assumptions" "loop guard recovery" || ok=1
+    echo "$out" | grep -q "loop guard: repeated clarification question reached limit" \
+        || { printf "\n    ${RED}loop guard blocker missing${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+
 test_init_refuses_overwrite() {
     local tmp
     tmp=$(mktemp -d)
@@ -912,6 +1102,12 @@ echo ""
 # Section: Init
 echo "--- init ---"
 run_test "creates artifacts"            test_init_creates_artifacts
+run_test "positional per-change artifacts" test_positional_change_uses_workspace_changes_dir
+run_test "structured artifacts created" test_structured_artifacts_created
+run_test "phase command updates active phase" test_phase_command_updates_active_phase
+run_test "independent change state"     test_independent_change_state
+run_test "claim graph blocks gate"      test_claim_graph_blocks_gate
+run_test "loop guard blocks gate"       test_loop_guard_blocks_gate
 run_test "refuses overwrite"            test_init_refuses_overwrite
 run_test "force overwrites"             test_init_force_overwrites
 run_test "invalid change-name rejected" test_init_invalid_change_name

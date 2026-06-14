@@ -67,7 +67,7 @@
       <div class="grid three">
         <div class="card"><h3>Critical collaborator</h3><p>writer 不再只是 order-taker；必須能提出建設性反對與替代方案。</p></div>
         <div class="card"><h3>Value Challenge Gate</h3><p>在 spec kernel 前檢查問題、受影響者、價值證據、不做的代價、no-build、smaller-scope。</p></div>
-        <div class="card"><h3>Workflow script</h3><p>新增 helper contract，建立 .writer-workflow artifacts 並在寫 OpenSpec 前執行品質閘門。</p></div>
+        <div class="card"><h3>Workflow script</h3><p>新增 helper contract，在 .writer-workflow/changes/&lt;change-name&gt;/ 建立 workspace-local 狀態，並在寫 OpenSpec 前執行品質閘門。</p></div>
       </div>
     </section>
 
@@ -117,7 +117,7 @@
         <tbody>
           <tr><td>SKILL.md</td><td>新增 critical collaborator、value challenge、pre-spec gate workflow 說明。</td></tr>
           <tr><td>scripts/</td><td>新增 agent-goal-writer-workflow helper；既有 openspec-* helpers 不被替換。</td></tr>
-          <tr><td>.writer-workflow/ artifacts</td><td>新增本地 pre-writing evidence：intake、value challenge、clarification、spec kernel、review report。</td></tr>
+          <tr><td>.writer-workflow/changes/&lt;change-name&gt;/ artifacts</td><td>新增 workspace-local pre-writing evidence：value-gate、spec-kernel notes、pre-spec gate report、write-spec status；不放入 OpenSpec governed sources。</td></tr>
           <tr><td>OpenSpec package</td><td>proposal/design/tasks/spec 必須保留價值辯論與假設。</td></tr>
         </tbody>
       </table>

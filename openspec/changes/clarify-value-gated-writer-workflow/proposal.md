@@ -12,7 +12,7 @@ This change clarifies that the writer is a critical collaborator, not an order-t
 ## What Changes
 
 - Define a value-gated writer workflow with explicit stages: intake, value challenge, clarification, spec kernel, pre-spec quality gate, OpenSpec write, and validation.
-- Introduce a bundled workflow-state helper script contract, tentatively `scripts/agent-goal-writer-workflow`, that creates stage artifacts, checks required fields, and blocks OpenSpec writing before the pre-spec gate is satisfied.
+- Introduce a bundled workflow-state helper script contract, `scripts/agent-goal-writer-workflow`, that creates workspace-local per-change artifacts, checks required fields, and blocks OpenSpec writing before the pre-spec gate is satisfied.
 - Require the writer to challenge goals constructively instead of over-accommodating user requests.
 - Add a pre-spec quality gate with three possible outcomes: `blocked`, `pass`, and `proceed_with_assumptions`.
 - Require value debate outputs, assumptions, no-build/smaller-scope alternatives, and unresolved value risks to be preserved in the eventual OpenSpec package.
@@ -21,7 +21,7 @@ This change clarifies that the writer is a critical collaborator, not an order-t
 
 - Affected specs: `agent-goal-writer-workflow`
 - Affected modules/repos: `agent-goal-writer` skill instructions and bundled `scripts/` helpers
-- Affected APIs/events/data: New local CLI/helper contract and local workflow artifacts under `.writer-workflow/`
+- Affected APIs/events/data: New local CLI/helper contract and workspace-local per-change workflow artifacts under `.writer-workflow/changes/<change-name>/`
 - Migration/deployment impact: Existing OpenSpec helper scripts remain compatible; this adds a stricter pre-writing path rather than replacing scaffold/manifest/explainer helpers.
 - User-visible impact: Users experience more constructive challenge before spec generation, especially for vague, high-cost, or low-evidence goals.
 

@@ -45,6 +45,8 @@ This skill is the prompt-level owner for the complete OpenSpec authoring line:
 
 - discovery / exploration before drafting;
 - value challenge and constructive disagreement before OpenSpec scaffolding;
+- phase-aware workspace workflow state, extract/reflect/recover reports,
+  claim-graph preservation checks, and clarification/challenge loop guards;
 - new-change proposal scaffolding;
 - `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md` writing;
 - `source-manifest.json` refresh and validation;
@@ -64,9 +66,14 @@ maps them into OpenSpec authoring:
 
 - **Discovery before drafting**: brain dump, stakes calibration, working mode,
   concern scan.
-- **Value gate before scaffolding**: test expected value, user benefit,
-  success evidence, no-build alternatives, and the smallest useful scope before
-  creating an OpenSpec package.
+- **Structured value gate before scaffolding**: test expected value, user
+  benefit, success evidence, no-build alternatives, and the smallest useful
+  scope before creating an OpenSpec package.
+- **Phase-aware workflow state**: keep workspace-local
+  `.writer-workflow/changes/<change-name>/workflow-state.json` progress,
+  extract/reflect/recover reports, claim graph preservation evidence, and loop
+  guards so long clarification sessions can resume without becoming
+  authoritative OpenSpec sources.
 - **Constructive disagreement**: challenge requests that appear wasteful,
   over-scoped, under-evidenced, or risky while keeping the user as final
   decision owner.
@@ -76,7 +83,9 @@ maps them into OpenSpec authoring:
   pre-mortem, red-team, stakeholder lens, first principles, and assumption audit.
 - **Load-bearing preservation**: every source claim that would change an
   implementation or verification decision must land in proposal/design/tasks/spec
-  or be recorded as an open question/non-goal.
+  or be recorded as an open question/non-goal; workflow claim graphs can block
+  pre-spec completion until load-bearing claims are preserved or explicitly
+  deferred.
 - **Quality rubric**: pre-spec value quality plus post-draft decision-readiness,
   done-ness clarity, scope honesty, downstream usability, boundary fit, and
   preservation.
@@ -201,10 +210,11 @@ Resolve `<skill-dir>` to the directory containing this `SKILL.md`. The skill
 ships these helper entrypoints and they use only Python's standard library:
 
 ```bash
-<skill-dir>/scripts/agent-goal-writer-workflow init --project-root <project-root> --change-name <change-name> --capability <capability> --goal "<goal>"
-<skill-dir>/scripts/agent-goal-writer-workflow check --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow gate --pre-spec --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow write-spec --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow init <change-name> --project-root <project-root> --capability <capability> --goal "<goal>"
+<skill-dir>/scripts/agent-goal-writer-workflow phase <change-name> --active value_challenge --status active --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow check <change-name> --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow write-spec <change-name> --project-root <project-root>
 <skill-dir>/scripts/openspec-propose <change-name> --project-root <project-root> --capability <capability>
 <skill-dir>/scripts/openspec-build-source-manifest <change-name> --project-root <project-root>
 <skill-dir>/scripts/openspec-validate-source-manifest <change-name> --project-root <project-root>
@@ -219,8 +229,11 @@ name:
 <skill-dir>/scripts/check-change-explainer.sh <change-name> --project-root <project-root> --require-decision-review
 ```
 
-The workflow helper creates `.writer-workflow/` artifacts, emits JSON status, and
+The workflow helper creates workspace-local `.writer-workflow/changes/<change-name>/` artifacts, emits JSON status, and
 enforces only `blocked`, `pass`, and `proceed_with_assumptions` pre-spec states.
+The artifact set includes `value-gate.json`, `workflow-state.json`,
+`extracted-claims.json`, `reflection-report.json`, `recovery-actions.json`,
+`claim-graph.json`, `pre-spec-gate.json`, and `write-spec-status.json`.
 `proceed_with_assumptions` requires an explicit acknowledgement before
 `gate --pre-spec` or `write-spec` can return success.
 
@@ -494,18 +507,22 @@ Capability/spec name rules:
 
 ### 9. Scaffold the OpenSpec change
 
-Use the bundled workflow helper first to materialize `.writer-workflow/`, record
+Use the bundled workflow helper first to materialize workspace-local `.writer-workflow/changes/<change-name>/` state, record
 and check the pre-spec gate, and only then write the starter OpenSpec package:
 
 ```bash
-<skill-dir>/scripts/agent-goal-writer-workflow init --project-root <project-root> --change-name <change-name> --capability <capability> --goal "<goal>"
-<skill-dir>/scripts/agent-goal-writer-workflow check --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow gate --pre-spec --project-root <project-root>
-<skill-dir>/scripts/agent-goal-writer-workflow write-spec --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow init <change-name> --project-root <project-root> --capability <capability> --goal "<goal>"
+<skill-dir>/scripts/agent-goal-writer-workflow phase <change-name> --active value_challenge --status active --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow check <change-name> --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow gate <change-name> --pre-spec --project-root <project-root>
+<skill-dir>/scripts/agent-goal-writer-workflow write-spec <change-name> --project-root <project-root>
 ```
 
 `gate --pre-spec` must report `pass`, or acknowledged
-`proceed_with_assumptions`, before files are written. The helper creates the
+`proceed_with_assumptions`, before files are written. Before that point, inspect
+`workflow-state.json`, `reflection-report.json`, `recovery-actions.json`, and
+`claim-graph.json`; do not repeat blocked clarification/challenge prompts, and
+ensure load-bearing claims are preserved or explicitly deferred. The helper creates the
 standard package, including `.openspec.yaml`, `proposal.md`, `design.md`,
 `tasks.md`, `source-manifest.json`, and a starter `specs/<capability>/spec.md`.
 Rewrite the generated markdown/spec content with the source-grounded templates

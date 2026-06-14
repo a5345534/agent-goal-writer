@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0",
+  "changeName": "add-structured-writer-workflow-phases",
+  "generatedAt": "2026-06-14T06:56:49.899664+00:00",
+  "sources": [
+    {
+      "path": "proposal.md",
+      "kind": "proposal",
+      "sha256": "aedaad176415e34929b55d93ea51d5abc787f089c4f504a8d79691ca9549d5cc"
+    },
+    {
+      "path": "design.md",
+      "kind": "design",
+      "sha256": "e4c45a2236aab997f15348152d258fb1aad31e0810025c8727efce0667af09c7"
+    },
+    {
+      "path": "tasks.md",
+      "kind": "tasks",
+      "sha256": "a2c17da0310e4d00c79d18cf7db3f26202530597fd7415940d75f281ce9cd9bf"
+    },
+    {
+      "path": "specs/agent-goal-writer-workflow/spec.md",
+      "kind": "spec-delta",
+      "sha256": "e1c82b9b090300320ba7d4891d03d010c9458ea0cbbbe85659d9c67e085f1a52"
+    }
+  ]
+}

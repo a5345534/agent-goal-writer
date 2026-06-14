@@ -20,12 +20,30 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "1.0"
-ARTIFACT_DIR = ".writer-workflow"
+ARTIFACT_ROOT = ".writer-workflow"
+CHANGE_ARTIFACTS_DIR = "changes"
+ARTIFACT_DIR = ARTIFACT_ROOT
 VALUE_GATE_FILE = "value-gate.json"
+WORKFLOW_STATE_FILE = "workflow-state.json"
+EXTRACTED_CLAIMS_FILE = "extracted-claims.json"
+REFLECTION_REPORT_FILE = "reflection-report.json"
+RECOVERY_ACTIONS_FILE = "recovery-actions.json"
+CLAIM_GRAPH_FILE = "claim-graph.json"
 STATUS_FILE = "status.json"
 PRE_SPEC_GATE_FILE = "pre-spec-gate.json"
 WRITE_SPEC_STATUS_FILE = "write-spec-status.json"
 VALID_STATUSES = ("blocked", "pass", "proceed_with_assumptions")
+PHASE_STATUSES = ("pending", "active", "complete", "skipped", "blocked")
+RECOVERY_ACTIONS = (
+    "ask-one-question",
+    "no-build",
+    "smaller-scope",
+    "proceed-with-assumptions",
+    "block-high-stakes",
+    "proceed-to-gate",
+)
+WORKFLOW_SCHEMA_VERSION = "1.1"
+CLAIM_GRAPH_SCHEMA_VERSION = "1.0"
 CHANGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 EXIT_PASS = 0
@@ -74,19 +92,119 @@ REQUIRED_PRE_SPEC_FIELDS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("decision", "smallerScopeConsidered"), "smaller-scope consideration"),
 )
 
+# Registry-style organization inspired by Omnigent's DomainRegistry pattern.
+# These are static standard-library data structures, not dynamic plugins.
+WORKFLOW_PHASE_TEMPLATES: tuple[dict[str, Any], ...] = (
+    {
+        "id": "intake",
+        "label": "Intake",
+        "objective": "Capture raw goal, source material, stakes, and ownership context.",
+        "steps": ("raw_goal", "inputs", "stakes"),
+    },
+    {
+        "id": "value_challenge",
+        "label": "Value Challenge",
+        "objective": "Challenge value, no-build, smaller-scope, and cost of inaction.",
+        "steps": ("beneficiary", "problem", "no_build", "smaller_scope", "value_rationale"),
+    },
+    {
+        "id": "clarification",
+        "label": "Clarification",
+        "objective": "Resolve scope, constraints, affected surfaces, and open questions.",
+        "steps": ("scope", "constraints", "non_goals", "open_questions"),
+    },
+    {
+        "id": "spec_kernel",
+        "label": "Spec Kernel",
+        "objective": "Distill why, capabilities, constraints, non-goals, success, assumptions.",
+        "steps": ("why", "capabilities", "success_signal", "assumptions"),
+    },
+    {
+        "id": "pre_spec_gate",
+        "label": "Pre-Spec Gate",
+        "objective": "Verify readiness, acknowledgement, and claim preservation before writing.",
+        "steps": ("value_gate", "claim_graph", "loop_guards"),
+    },
+    {
+        "id": "openspec_write",
+        "label": "OpenSpec Write",
+        "objective": "Write proposal, design, tasks, spec delta, and manifest.",
+        "steps": ("proposal", "design", "tasks", "spec_delta"),
+    },
+    {
+        "id": "validation",
+        "label": "Validation",
+        "objective": "Run manifest, explainer, workflow, and archive-readiness validation.",
+        "steps": ("manifest", "explainer", "archive_preflight"),
+    },
+)
+
+GATE_CHECKS: dict[str, str] = {
+    "pre_spec_artifact": "value-gate schema and required pre-spec fields",
+    "phase_state": "workflow-state phases and active phase",
+    "claim_preservation": "load-bearing claims preserved or explicitly deferred",
+    "loop_guards": "clarification/challenge loop limits not exceeded",
+}
+
+EXTRACTORS: dict[str, tuple[str, ...]] = {
+    "value_frame": (
+        "beneficiary",
+        "problemOrOpportunity",
+        "whyNow",
+        "successSignal",
+        "costRiskShape",
+        "noBuildCandidate",
+        "smallerScopeCandidate",
+        "scopeSummary",
+        "verificationPath",
+    ),
+    "decision": ("rationale", "noBuildConsidered", "smallerScopeConsidered"),
+}
+
+REFLECTORS: dict[str, str] = {
+    "value_clarity": "beneficiary, problem, why-now, and rationale must be present",
+    "scope_discipline": "scope, non-goals, no-build, and smaller-scope must be visible",
+    "verification": "success signal and verification path must be observable",
+    "assumption_posture": "proceed_with_assumptions requires explicit acknowledgement",
+}
+
+RECOVERY_STRATEGIES: dict[str, str] = {
+    "ask-one-question": "Ask one focused question that resolves the highest-impact blocker.",
+    "no-build": "Recommend no-build when value is not established.",
+    "smaller-scope": "Recommend a smaller governed slice when scope is too broad.",
+    "proceed-with-assumptions": "Proceed only with explicit acknowledgement and visible assumptions.",
+    "block-high-stakes": "Block irreversible or high-stakes ambiguity.",
+    "proceed-to-gate": "Run the pre-spec gate when no blockers remain.",
+}
+
+PRESERVATION_RULES: dict[str, tuple[str, ...]] = {
+    "proposal.md": ("why", "scope", "impact", "success", "assumptions", "open_questions"),
+    "design.md": ("decisions", "alternatives", "risks", "constraints", "preservation_notes"),
+    "tasks.md": ("implementation", "verification", "closeout"),
+    "specs/**/spec.md": ("normative_behavior", "scenarios"),
+}
+
 README_TEMPLATE = """# Agent Goal Writer local workflow artifacts
 
 This directory is owned by `scripts/agent-goal-writer-workflow`.
-It records the value gate that must pass before an OpenSpec package is
-scaffolded or written.
+It records the workspace-local value gate for one OpenSpec change before that
+package is scaffolded or written. The normal location is
+`.writer-workflow/changes/<change-name>/`; the OpenSpec package remains under
+`openspec/changes/<change-name>/`.
 
 ## Files
 
 - `value-gate.json` — machine-readable pre-spec gate state. Edit this file to
   move from `blocked` to `pass` or `proceed_with_assumptions`.
+- `workflow-state.json` — phase-aware progress, active phase, and loop guards.
+- `extracted-claims.json` — deterministic extraction from value-frame/source fields.
+- `reflection-report.json` — value/scope/risk/verification gap report.
+- `recovery-actions.json` — one recommended next action.
+- `claim-graph.json` — load-bearing claim preservation map.
 - `spec-kernel.md` — scratch template for the human-readable Spec Kernel.
 - `status.json`, `pre-spec-gate.json`, `write-spec-status.json` — reports
-  written by the helper.
+  written by the helper. These workflow-state reports are workspace artifacts,
+  not authoritative OpenSpec sources.
 
 ## Allowed statuses
 
@@ -198,12 +316,35 @@ def resolve_under_root(root: Path, raw: str) -> Path:
     return path if path.is_absolute() else root / path
 
 
-def artifact_dir(root: Path, raw: str | None) -> Path:
-    return resolve_under_root(root, raw or ARTIFACT_DIR)
+def normalize_optional_text(raw: Any) -> str | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
 
 
-def value_gate_path(root: Path, raw_artifact_dir: str | None) -> Path:
-    return artifact_dir(root, raw_artifact_dir) / VALUE_GATE_FILE
+def requested_change_name(args: argparse.Namespace) -> str | None:
+    positional = normalize_optional_text(getattr(args, "change_name_arg", None))
+    named = normalize_optional_text(getattr(args, "change_name", None))
+    if positional and named and positional != named:
+        raise ValueError("positional change name and --change-name must match when both are provided")
+    return positional or named
+
+
+def positional_change_name(args: argparse.Namespace) -> str | None:
+    return normalize_optional_text(getattr(args, "change_name_arg", None))
+
+
+def artifact_dir(root: Path, raw: str | None, change_name: str | None = None) -> Path:
+    if raw:
+        return resolve_under_root(root, raw)
+    if change_name:
+        return root / ARTIFACT_ROOT / CHANGE_ARTIFACTS_DIR / change_name
+    return root / ARTIFACT_ROOT
+
+
+def value_gate_path(root: Path, raw_artifact_dir: str | None, change_name: str | None = None) -> Path:
+    return artifact_dir(root, raw_artifact_dir, change_name) / VALUE_GATE_FILE
 
 
 def is_placeholder(value: Any) -> bool:
@@ -329,8 +470,340 @@ def default_value_gate(change_name: str | None, capability: str | None, goal: st
     }
 
 
-def load_gate(root: Path, raw_artifact_dir: str | None, command: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path]:
-    base = artifact_dir(root, raw_artifact_dir)
+def default_phase(phase_template: dict[str, Any], *, active: bool = False) -> dict[str, Any]:
+    return {
+        "id": phase_template["id"],
+        "label": phase_template["label"],
+        "objective": phase_template["objective"],
+        "status": "active" if active else "pending",
+        "skipCondition": "",
+        "consecutiveFailures": 0,
+        "steps": [
+            {"id": step_id, "status": "pending", "summary": ""}
+            for step_id in phase_template.get("steps", ())
+        ],
+    }
+
+
+def default_workflow_state(change_name: str | None, capability: str | None, goal: str | None) -> dict[str, Any]:
+    phases = [default_phase(template, active=(i == 0)) for i, template in enumerate(WORKFLOW_PHASE_TEMPLATES)]
+    return {
+        "schemaVersion": WORKFLOW_SCHEMA_VERSION,
+        "changeName": change_name or "",
+        "capability": capability or "",
+        "goal": goal or "",
+        "activePhase": phases[0]["id"],
+        "phases": phases,
+        "loopGuards": {
+            "clarificationTurns": 0,
+            "challengeTurns": 0,
+            "repeatedQuestionHashes": [],
+            "repeatedChallengeHashes": [],
+            "maxClarificationTurns": 3,
+            "maxChallengeTurns": 2,
+            "maxRepeatedQuestionCount": 2,
+            "maxRepeatedChallengeCount": 2,
+        },
+        "createdAt": utc_now(),
+        "updatedAt": utc_now(),
+    }
+
+
+def default_claim_graph(change_name: str | None) -> dict[str, Any]:
+    return {
+        "schemaVersion": CLAIM_GRAPH_SCHEMA_VERSION,
+        "changeName": change_name or "",
+        "claims": [],
+        "edges": [],
+        "updatedAt": utc_now(),
+    }
+
+
+def read_json_optional(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return read_json(path)
+    except Exception:
+        return None
+
+
+def field_status(value: Any) -> str:
+    return "present" if is_filled(value) else "missing"
+
+
+def extract_claims_from_gate(payload: dict[str, Any]) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    for section, names in EXTRACTORS.items():
+        section_payload = payload.get(section)
+        if not isinstance(section_payload, dict):
+            section_payload = {}
+        fields[section] = {
+            name: {
+                "value": section_payload.get(name, ""),
+                "status": field_status(section_payload.get(name)),
+            }
+            for name in names
+        }
+
+    list_fields = {
+        "constraints": list_items(payload.get("constraints")),
+        "nonGoals": list_items(payload.get("nonGoals")),
+        "assumptions": list_items(payload.get("assumptions")),
+        "risks": list_items(payload.get("risks")),
+        "openQuestions": list_items(payload.get("openQuestions")),
+        "blockers": list_items(payload.get("blockers")),
+    }
+
+    claims: list[dict[str, Any]] = []
+    problem = get_path(payload, ("valueFrame", "problemOrOpportunity"))
+    if is_filled(problem):
+        claims.append({"id": "claim-problem", "kind": "problem", "text": str(problem), "loadBearing": True, "source": "value-gate"})
+    success = get_path(payload, ("valueFrame", "successSignal"))
+    if is_filled(success):
+        claims.append({"id": "claim-success-signal", "kind": "success_signal", "text": str(success), "loadBearing": True, "source": "value-gate"})
+    for index, assumption in enumerate(list_fields["assumptions"], 1):
+        claims.append({"id": f"claim-assumption-{index:03d}", "kind": "assumption", "text": assumption, "loadBearing": True, "source": "value-gate"})
+
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": str(payload.get("changeName", "")),
+        "capability": str(payload.get("capability", "")),
+        "generatedAt": utc_now(),
+        "fields": fields,
+        "lists": list_fields,
+        "claims": claims,
+    }
+
+
+def validate_workflow_state(state: dict[str, Any] | None) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    checks: list[dict[str, str]] = []
+    if state is None:
+        warnings.append(f"missing {WORKFLOW_STATE_FILE}; synthesized compatibility state")
+        checks.append({"name": "phase_state", "status": "warn", "message": "workflow-state missing; compatibility synthesis used"})
+        return errors, warnings, checks
+
+    phases = state.get("phases")
+    if not isinstance(phases, list) or not phases:
+        errors.append("workflow-state phases must be a non-empty array")
+    else:
+        phase_ids = {str(phase.get("id", "")) for phase in phases if isinstance(phase, dict)}
+        active = str(state.get("activePhase", ""))
+        if active and active not in phase_ids:
+            errors.append("workflow-state activePhase must reference an existing phase")
+        for phase in phases:
+            if not isinstance(phase, dict):
+                errors.append("workflow-state phase entries must be objects")
+                continue
+            status = str(phase.get("status", ""))
+            if status not in PHASE_STATUSES:
+                errors.append(f"workflow-state phase {phase.get('id', '<unknown>')} has invalid status {status!r}")
+    loop_guards = state.get("loopGuards")
+    if not isinstance(loop_guards, dict):
+        errors.append("workflow-state loopGuards must be an object")
+    checks.append({"name": "phase_state", "status": "fail" if errors else "pass", "message": "; ".join(errors) or "workflow phase state is valid"})
+    return errors, warnings, checks
+
+
+def repeated_hash_blockers(loop_guards: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    question_hashes = [str(item) for item in loop_guards.get("repeatedQuestionHashes", []) if is_filled(item)]
+    challenge_hashes = [str(item) for item in loop_guards.get("repeatedChallengeHashes", []) if is_filled(item)]
+    max_question = int(loop_guards.get("maxRepeatedQuestionCount") or 2)
+    max_challenge = int(loop_guards.get("maxRepeatedChallengeCount") or 2)
+    for label, hashes, limit in (("clarification question", question_hashes, max_question), ("value challenge", challenge_hashes, max_challenge)):
+        counts: dict[str, int] = {}
+        for item in hashes:
+            counts[item] = counts.get(item, 0) + 1
+        repeated = [item for item, count in counts.items() if count >= limit]
+        if repeated:
+            blockers.append(f"loop guard: repeated {label} reached limit {limit}")
+    clarification_turns = int(loop_guards.get("clarificationTurns") or 0)
+    challenge_turns = int(loop_guards.get("challengeTurns") or 0)
+    max_clarification = int(loop_guards.get("maxClarificationTurns") or 3)
+    max_challenge_turns = int(loop_guards.get("maxChallengeTurns") or 2)
+    if clarification_turns > max_clarification:
+        blockers.append(f"loop guard: clarification turns {clarification_turns} exceeded max {max_clarification}")
+    if challenge_turns > max_challenge_turns:
+        blockers.append(f"loop guard: challenge turns {challenge_turns} exceeded max {max_challenge_turns}")
+    return blockers
+
+
+def claim_graph_blockers(claim_graph: dict[str, Any] | None) -> list[str]:
+    if claim_graph is None:
+        return []
+    blockers: list[str] = []
+    claims = claim_graph.get("claims")
+    if not isinstance(claims, list):
+        blockers.append("claim graph: claims must be an array")
+        return blockers
+    for index, claim in enumerate(claims, 1):
+        if not isinstance(claim, dict):
+            blockers.append(f"claim graph: claim {index} must be an object")
+            continue
+        load_bearing = bool(claim.get("loadBearing"))
+        status = str(claim.get("status", "unpreserved")).strip() or "unpreserved"
+        claim_id = str(claim.get("id") or f"claim-{index}")
+        acknowledged = claim.get("acknowledged") is True
+        allowed_unpreserved = status in {"deferred", "non_load_bearing", "assumption", "open_question"} or acknowledged
+        if load_bearing and status == "preserved":
+            destinations = claim.get("destinations")
+            if not isinstance(destinations, list) or not destinations:
+                blockers.append(f"claim graph: preserved load-bearing claim {claim_id} has no OpenSpec destination")
+        elif load_bearing and not allowed_unpreserved:
+            blockers.append(f"claim graph: load-bearing claim {claim_id} is {status}")
+    return blockers
+
+
+def reflection_report(payload: dict[str, Any], extracted: dict[str, Any], workflow_state: dict[str, Any] | None, claim_graph: dict[str, Any] | None) -> dict[str, Any]:
+    gaps: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+    info: list[dict[str, str]] = []
+    for path, label in REQUIRED_PRE_SPEC_FIELDS:
+        if not is_filled(get_path(payload, path)):
+            severity = "blocker" if str(payload.get("status", "blocked")) in {"pass", "proceed_with_assumptions"} else "warning"
+            gaps.append({"kind": "missing_field", "field": ".".join(path), "label": label, "severity": severity})
+    if str(payload.get("status", "")) == "pass" and list_items(payload.get("openQuestions")):
+        warnings.append({"kind": "open_questions_on_pass", "severity": "warning", "message": "pass status has open questions"})
+    loop_blockers = repeated_hash_blockers((workflow_state or {}).get("loopGuards", {}) if isinstance((workflow_state or {}).get("loopGuards", {}), dict) else {})
+    for blocker in loop_blockers:
+        gaps.append({"kind": "loop_guard", "severity": "blocker", "message": blocker})
+    for blocker in claim_graph_blockers(claim_graph):
+        gaps.append({"kind": "claim_preservation", "severity": "blocker", "message": blocker})
+    if not gaps and not warnings:
+        info.append({"kind": "ready", "severity": "info", "message": "No deterministic reflection gaps detected"})
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": str(payload.get("changeName", "")),
+        "generatedAt": utc_now(),
+        "gaps": gaps,
+        "warnings": warnings,
+        "info": info,
+        "summary": {
+            "blockerCount": sum(1 for gap in gaps if gap.get("severity") == "blocker"),
+            "warningCount": len(warnings) + sum(1 for gap in gaps if gap.get("severity") == "warning"),
+        },
+    }
+
+
+def choose_recovery_action(payload: dict[str, Any], reflection: dict[str, Any], workflow_state: dict[str, Any] | None) -> dict[str, Any]:
+    gaps = reflection.get("gaps") if isinstance(reflection.get("gaps"), list) else []
+    blocker_kinds = {str(gap.get("kind", "")) for gap in gaps if isinstance(gap, dict) and gap.get("severity") == "blocker"}
+    loop_guards = (workflow_state or {}).get("loopGuards", {})
+    if not isinstance(loop_guards, dict):
+        loop_guards = {}
+    high_stakes = any("security" in item.lower() or "production" in item.lower() or "api" in item.lower() for item in list_items(payload.get("risks")))
+    if high_stakes and blocker_kinds:
+        action = "block-high-stakes"
+    elif "loop_guard" in blocker_kinds and list_items(payload.get("assumptions")):
+        action = "proceed-with-assumptions"
+    elif "claim_preservation" in blocker_kinds:
+        action = "ask-one-question"
+    elif blocker_kinds:
+        action = "ask-one-question"
+    elif str(payload.get("status", "")) == "blocked":
+        action = "ask-one-question"
+    elif not is_filled(get_path(payload, ("decision", "noBuildConsidered"))):
+        action = "no-build"
+    elif not is_filled(get_path(payload, ("decision", "smallerScopeConsidered"))):
+        action = "smaller-scope"
+    elif str(payload.get("status", "")) == "proceed_with_assumptions":
+        action = "proceed-with-assumptions"
+    else:
+        action = "proceed-to-gate"
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": str(payload.get("changeName", "")),
+        "generatedAt": utc_now(),
+        "recommendedAction": action,
+        "strategy": RECOVERY_STRATEGIES[action],
+        "alternatives": [name for name in RECOVERY_ACTIONS if name != action],
+    }
+
+
+def ensure_structured_artifacts(base: Path, payload: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
+    change_name = str(payload.get("changeName", ""))
+    capability = str(payload.get("capability", ""))
+    goal = str(payload.get("goal", ""))
+    files: dict[str, str] = {}
+
+    workflow_path = base / WORKFLOW_STATE_FILE
+    workflow_state = read_json_optional(workflow_path)
+    if force or workflow_state is None:
+        workflow_state = default_workflow_state(change_name, capability, goal)
+        write_json(workflow_path, workflow_state)
+    files["workflowStateFile"] = str(workflow_path)
+
+    claim_graph_path = base / CLAIM_GRAPH_FILE
+    claim_graph = read_json_optional(claim_graph_path)
+    if force or claim_graph is None:
+        claim_graph = default_claim_graph(change_name)
+        write_json(claim_graph_path, claim_graph)
+    files["claimGraphFile"] = str(claim_graph_path)
+
+    extracted = extract_claims_from_gate(payload)
+    extracted_path = base / EXTRACTED_CLAIMS_FILE
+    write_json(extracted_path, extracted)
+    files["extractedClaimsFile"] = str(extracted_path)
+
+    reflection = reflection_report(payload, extracted, workflow_state, claim_graph)
+    reflection_path = base / REFLECTION_REPORT_FILE
+    write_json(reflection_path, reflection)
+    files["reflectionReportFile"] = str(reflection_path)
+
+    recovery = choose_recovery_action(payload, reflection, workflow_state)
+    recovery_path = base / RECOVERY_ACTIONS_FILE
+    write_json(recovery_path, recovery)
+    files["recoveryActionsFile"] = str(recovery_path)
+
+    return {
+        "files": files,
+        "workflowState": workflow_state,
+        "extractedClaims": extracted,
+        "reflectionReport": reflection,
+        "recoveryActions": recovery,
+        "claimGraph": claim_graph,
+    }
+
+
+def structured_artifact_findings(base: Path, payload: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str], list[dict[str, str]]]:
+    context = ensure_structured_artifacts(base, payload)
+    warnings: list[str] = []
+    errors: list[str] = []
+    checks: list[dict[str, str]] = []
+
+    workflow_state = context.get("workflowState") if isinstance(context.get("workflowState"), dict) else None
+    state_errors, state_warnings, state_checks = validate_workflow_state(workflow_state)
+    errors.extend(state_errors)
+    warnings.extend(state_warnings)
+    checks.extend(state_checks)
+
+    loop_blockers = repeated_hash_blockers((workflow_state or {}).get("loopGuards", {}) if isinstance((workflow_state or {}).get("loopGuards", {}), dict) else {})
+    if loop_blockers:
+        checks.append({"name": "loop_guards", "status": "fail", "message": "; ".join(loop_blockers)})
+    else:
+        checks.append({"name": "loop_guards", "status": "pass", "message": "loop guard limits are not exceeded"})
+
+    claim_blockers = claim_graph_blockers(context.get("claimGraph") if isinstance(context.get("claimGraph"), dict) else None)
+    if claim_blockers:
+        checks.append({"name": "claim_preservation", "status": "fail", "message": "; ".join(claim_blockers)})
+    else:
+        checks.append({"name": "claim_preservation", "status": "pass", "message": "no unpreserved load-bearing claims"})
+
+    blockers = loop_blockers + claim_blockers
+    context["structuredBlockers"] = blockers
+    return context, errors, warnings, checks
+
+
+def load_gate(
+    root: Path,
+    raw_artifact_dir: str | None,
+    command: str,
+    change_name: str | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, Path]:
+    base = artifact_dir(root, raw_artifact_dir, change_name)
     path = base / VALUE_GATE_FILE
     if not path.exists():
         report = json_report(
@@ -431,6 +904,33 @@ def evaluate_gate(payload: dict[str, Any], command: str, base: Path) -> tuple[di
 
     checks.append({"name": "pre_spec_artifact", "status": "pass", "message": "artifact schema and status are valid"})
 
+    structured_context, structured_errors, structured_warnings, structured_checks = structured_artifact_findings(base, payload)
+    warnings.extend(structured_warnings)
+    checks.extend(structured_checks)
+    if structured_errors:
+        checks.append({"name": "structured_artifacts", "status": "fail", "message": "; ".join(structured_errors)})
+        report = json_report(
+            command,
+            status_for_report,
+            "invalid_artifact",
+            EXIT_INVALID_ARTIFACT,
+            artifactDir=str(base),
+            valueGateFile=str(base / VALUE_GATE_FILE),
+            changeName=change_name,
+            capability=capability,
+            checks=checks,
+            warnings=warnings,
+            errors=structured_errors,
+            workflow=structured_context.get("files", {}),
+        )
+        return report, EXIT_INVALID_ARTIFACT
+
+    structured_blockers = list(structured_context.get("structuredBlockers", []))
+    value_blockers = list_items(payload.get("blockers"))
+    combined_blockers = value_blockers + structured_blockers
+    recovery = structured_context.get("recoveryActions") if isinstance(structured_context.get("recoveryActions"), dict) else {}
+    workflow_state = structured_context.get("workflowState") if isinstance(structured_context.get("workflowState"), dict) else {}
+
     common = {
         "artifactDir": str(base),
         "valueGateFile": str(base / VALUE_GATE_FILE),
@@ -438,10 +938,17 @@ def evaluate_gate(payload: dict[str, Any], command: str, base: Path) -> tuple[di
         "capability": capability,
         "checks": checks,
         "warnings": warnings,
-        "blockers": list_items(payload.get("blockers")),
+        "blockers": combined_blockers,
         "openQuestions": list_items(payload.get("openQuestions")),
         "assumptions": list_items(payload.get("assumptions")),
+        "workflow": structured_context.get("files", {}),
+        "activePhase": workflow_state.get("activePhase", "") if isinstance(workflow_state, dict) else "",
+        "recoveryAction": recovery.get("recommendedAction", "") if isinstance(recovery, dict) else "",
     }
+
+    if status in {"pass", "proceed_with_assumptions"} and structured_blockers:
+        report = json_report(command, "blocked", "blocked", EXIT_BLOCKED, **common)
+        return report, EXIT_BLOCKED
 
     if status == "blocked":
         report = json_report(command, "blocked", "blocked", EXIT_BLOCKED, **common)
@@ -620,7 +1127,29 @@ Beneficiary: {value(payload, ("valueFrame", "beneficiary"))}
 """
 
 
-def render_design(payload: dict[str, Any]) -> str:
+def claim_preservation_notes(claim_graph: dict[str, Any] | None) -> str:
+    if not claim_graph or not isinstance(claim_graph.get("claims"), list) or not claim_graph.get("claims"):
+        return "- No load-bearing claims were recorded in `claim-graph.json` at generation time."
+    notes: list[str] = []
+    for index, claim in enumerate(claim_graph.get("claims", []), 1):
+        if not isinstance(claim, dict):
+            continue
+        claim_id = str(claim.get("id") or f"claim-{index}")
+        text = str(claim.get("text") or "").strip() or "<unspecified claim>"
+        status = str(claim.get("status") or "unpreserved")
+        destinations = claim.get("destinations")
+        if isinstance(destinations, list) and destinations:
+            rendered_destinations = ", ".join(
+                str(dest.get("file", dest)) if isinstance(dest, dict) else str(dest)
+                for dest in destinations
+            )
+        else:
+            rendered_destinations = "not yet assigned"
+        notes.append(f"- `{claim_id}` ({status}): {text} → {rendered_destinations}")
+    return "\n".join(notes) if notes else "- No valid claims were recorded in `claim-graph.json`."
+
+
+def render_design(payload: dict[str, Any], claim_graph: dict[str, Any] | None = None) -> str:
     change_name = value(payload, ("changeName",))
     capability = value(payload, ("capability",))
     status = value(payload, ("status",), "pass")
@@ -717,6 +1246,10 @@ TBD
 
 - Value gate status `{status}` and rationale are preserved in `proposal.md` and this design.
 - Success signal is preserved in `proposal.md`, this design, and the spec scenario.
+
+### Claim Graph Preservation
+
+{claim_preservation_notes(claim_graph)}
 """
 
 
@@ -787,7 +1320,7 @@ valueGateStatus: {value(payload, ("status",), "pass")}
 """
 
 
-def write_spec_package(payload: dict[str, Any], root: Path, args: argparse.Namespace) -> dict[str, Any]:
+def write_spec_package(payload: dict[str, Any], root: Path, args: argparse.Namespace, workflow_base: Path | None = None) -> dict[str, Any]:
     change_name = value(payload, ("changeName",))
     capability = value(payload, ("capability",))
     changes_dir = resolve_under_root(root, args.changes_dir or "openspec/changes")
@@ -797,8 +1330,9 @@ def write_spec_package(payload: dict[str, Any], root: Path, args: argparse.Names
 
     written: list[str] = []
     write_text_file(base / ".openspec.yaml", render_yaml(payload), force=args.force, written=written)
+    claim_graph = read_json_optional(workflow_base / CLAIM_GRAPH_FILE) if workflow_base else None
     write_text_file(base / "proposal.md", render_proposal(payload), force=args.force, written=written)
-    write_text_file(base / "design.md", render_design(payload), force=args.force, written=written)
+    write_text_file(base / "design.md", render_design(payload, claim_graph), force=args.force, written=written)
     write_text_file(base / "tasks.md", render_tasks(payload), force=args.force, written=written)
     write_text_file(base / "specs" / capability / "spec.md", render_spec(payload), force=args.force, written=written)
     manifest = build_manifest(change_name, base)
@@ -810,10 +1344,16 @@ def write_spec_package(payload: dict[str, Any], root: Path, args: argparse.Names
 
 def cmd_init(args: argparse.Namespace) -> int:
     root = project_root(args.project_root)
-    base = artifact_dir(root, args.artifact_dir)
     errors: list[str] = []
-    if args.change_name and not CHANGE_NAME_RE.fullmatch(args.change_name):
-        errors.append("--change-name must match ^[a-z0-9][a-z0-9-]*$")
+    try:
+        change_name = requested_change_name(args)
+    except ValueError as err:
+        report = json_report("init", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    base = artifact_dir(root, args.artifact_dir, positional_change_name(args))
+    if change_name and not CHANGE_NAME_RE.fullmatch(change_name):
+        errors.append("change name must match ^[a-z0-9][a-z0-9-]*$")
     if args.capability and not CHANGE_NAME_RE.fullmatch(args.capability):
         errors.append("--capability must match ^[a-z0-9][a-z0-9-]*$")
     if errors:
@@ -837,8 +1377,13 @@ def cmd_init(args: argparse.Namespace) -> int:
         dump(report)
         return EXIT_INVALID_ARTIFACT
 
-    write_json(gate_path, default_value_gate(args.change_name, args.capability, args.goal))
+    gate_payload = default_value_gate(change_name, args.capability, args.goal)
+    write_json(gate_path, gate_payload)
     written.append(str(gate_path))
+    structured = ensure_structured_artifacts(base, gate_payload, force=args.force)
+    for path in structured.get("files", {}).values():
+        if isinstance(path, str) and path not in written:
+            written.append(path)
     kernel_path = base / "spec-kernel.md"
     if args.force or not kernel_path.exists():
         kernel_path.write_text(SPEC_KERNEL_TEMPLATE)
@@ -848,6 +1393,14 @@ def cmd_init(args: argparse.Namespace) -> int:
         readme_path.write_text(README_TEMPLATE)
         written.append(str(readme_path))
 
+    check_cmd = "scripts/agent-goal-writer-workflow check"
+    gate_cmd = "scripts/agent-goal-writer-workflow gate --pre-spec"
+    write_cmd = "scripts/agent-goal-writer-workflow write-spec"
+    positional = positional_change_name(args)
+    if positional:
+        check_cmd = f"scripts/agent-goal-writer-workflow check {positional}"
+        gate_cmd = f"scripts/agent-goal-writer-workflow gate {positional} --pre-spec"
+        write_cmd = f"scripts/agent-goal-writer-workflow write-spec {positional}"
     report = json_report(
         "init",
         "blocked",
@@ -859,9 +1412,66 @@ def cmd_init(args: argparse.Namespace) -> int:
         files=written,
         nextSteps=[
             f"Edit {gate_path} and set status to pass or proceed_with_assumptions.",
-            "Run `scripts/agent-goal-writer-workflow check`.",
-            "Run `scripts/agent-goal-writer-workflow gate --pre-spec` before write-spec.",
+            f"Run `{check_cmd}`.",
+            f"Run `{gate_cmd}` before `{write_cmd}`.",
         ],
+    )
+    write_json(base / STATUS_FILE, report)
+    dump(report)
+    return EXIT_PASS
+
+
+def cmd_phase(args: argparse.Namespace) -> int:
+    root = project_root(args.project_root)
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("phase", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "phase", positional_change_name(args))
+    if error_report is not None:
+        write_json(base / STATUS_FILE, error_report)
+        dump(error_report)
+        return int(error_report["exitCode"])
+    assert payload is not None
+    context = ensure_structured_artifacts(base, payload)
+    state = context.get("workflowState") if isinstance(context.get("workflowState"), dict) else None
+    if state is None:
+        report = json_report("phase", "invalid_artifact", "invalid_artifact", EXIT_INVALID_ARTIFACT, errors=["workflow-state could not be loaded"], artifactDir=str(base))
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+
+    active = str(getattr(args, "active", "") or "").strip()
+    status = str(getattr(args, "status", "") or "active").strip()
+    if status not in PHASE_STATUSES:
+        report = json_report("phase", "invalid_artifact", "invalid_artifact", EXIT_INVALID_ARTIFACT, errors=["--status must be one of: " + ", ".join(PHASE_STATUSES)], artifactDir=str(base))
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+    phases = state.get("phases") if isinstance(state.get("phases"), list) else []
+    target = None
+    for phase in phases:
+        if isinstance(phase, dict) and phase.get("id") == active:
+            target = phase
+            break
+    if target is None:
+        report = json_report("phase", "invalid_artifact", "invalid_artifact", EXIT_INVALID_ARTIFACT, errors=[f"unknown phase: {active}"], artifactDir=str(base))
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+
+    target["status"] = status
+    state["activePhase"] = active
+    state["updatedAt"] = utc_now()
+    write_json(base / WORKFLOW_STATE_FILE, state)
+    report = json_report(
+        "phase",
+        "pass",
+        "updated",
+        EXIT_PASS,
+        artifactDir=str(base),
+        workflowStateFile=str(base / WORKFLOW_STATE_FILE),
+        activePhase=active,
+        phaseStatus=status,
     )
     write_json(base / STATUS_FILE, report)
     dump(report)
@@ -870,7 +1480,13 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     root = project_root(args.project_root)
-    payload, error_report, base = load_gate(root, args.artifact_dir, "check")
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("check", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "check", positional_change_name(args))
     if error_report is not None:
         write_json(base / STATUS_FILE, error_report)
         dump(error_report)
@@ -884,12 +1500,18 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_gate(args: argparse.Namespace) -> int:
     root = project_root(args.project_root)
-    base = artifact_dir(root, args.artifact_dir)
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("gate", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    base = artifact_dir(root, args.artifact_dir, positional_change_name(args))
     if not args.pre_spec:
         report = json_report("gate", "usage_error", "usage_error", EXIT_USAGE, errors=["gate requires --pre-spec"])
         dump(report)
         return EXIT_USAGE
-    payload, error_report, base = load_gate(root, args.artifact_dir, "gate")
+    payload, error_report, base = load_gate(root, args.artifact_dir, "gate", positional_change_name(args))
     if error_report is not None:
         write_json(base / PRE_SPEC_GATE_FILE, error_report)
         dump(error_report)
@@ -909,7 +1531,13 @@ def cmd_gate(args: argparse.Namespace) -> int:
 
 def cmd_write_spec(args: argparse.Namespace) -> int:
     root = project_root(args.project_root)
-    payload, error_report, base = load_gate(root, args.artifact_dir, "write-spec")
+    try:
+        requested_change_name(args)
+    except ValueError as err:
+        report = json_report("write-spec", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)])
+        dump(report)
+        return EXIT_USAGE
+    payload, error_report, base = load_gate(root, args.artifact_dir, "write-spec", positional_change_name(args))
     if error_report is not None:
         write_json(base / WRITE_SPEC_STATUS_FILE, error_report)
         dump(error_report)
@@ -929,7 +1557,7 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
         return gate_code
 
     try:
-        result = write_spec_package(payload, root, args)
+        result = write_spec_package(payload, root, args, workflow_base=base)
     except Exception as err:  # noqa: BLE001
         report = json_report(
             "write-spec",
@@ -975,16 +1603,28 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
 
     init = subparsers.add_parser("init", parents=[common], help="create .writer-workflow artifacts")
-    init.add_argument("--change-name", help="kebab-case OpenSpec change name")
+    init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .writer-workflow/changes/<change-name>/")
+    init.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     init.add_argument("--capability", help="kebab-case OpenSpec capability/spec name")
     init.add_argument("--goal", help="source user goal or intended outcome")
     init.add_argument("--force", action="store_true", help="replace existing helper artifacts")
     init.set_defaults(func=cmd_init)
 
+    phase = subparsers.add_parser("phase", parents=[common], help="update or report phase-aware workflow state")
+    phase.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    phase.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
+    phase.add_argument("--active", required=True, help="phase id to set as active")
+    phase.add_argument("--status", choices=PHASE_STATUSES, default="active", help="status to assign to the active phase")
+    phase.set_defaults(func=cmd_phase)
+
     check = subparsers.add_parser("check", parents=[common], help="validate workflow artifacts and report gate status")
+    check.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    check.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     check.set_defaults(func=cmd_check)
 
     gate = subparsers.add_parser("gate", parents=[common], help="enforce workflow gates")
+    gate.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    gate.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     gate.add_argument("--pre-spec", action="store_true", help="enforce the value gate before OpenSpec writing")
     gate.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
     gate.add_argument("--acknowledgement", help="acknowledgement rationale required with --acknowledge-assumptions")
@@ -992,6 +1632,8 @@ def build_parser() -> argparse.ArgumentParser:
     gate.set_defaults(func=cmd_gate)
 
     write_spec = subparsers.add_parser("write-spec", parents=[common], help="write OpenSpec templates after the pre-spec gate passes")
+    write_spec.add_argument("change_name_arg", nargs="?", help="kebab-case change name selecting .writer-workflow/changes/<change-name>/")
+    write_spec.add_argument("--change-name", help="kebab-case OpenSpec change name metadata; must match positional name when both are provided")
     write_spec.add_argument("--changes-dir", default="openspec/changes", help="OpenSpec changes directory, relative to project root unless absolute")
     write_spec.add_argument("--force", action="store_true", help="overwrite helper-managed OpenSpec files")
     write_spec.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
@@ -1008,7 +1650,7 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "project_root"):
         args.project_root = "."
     if not hasattr(args, "artifact_dir"):
-        args.artifact_dir = ARTIFACT_DIR
+        args.artifact_dir = None
     return int(args.func(args))
 
 

@@ -1,27 +1,27 @@
 {
   "schemaVersion": "1.0",
   "changeName": "clarify-value-gated-writer-workflow",
-  "generatedAt": "2026-06-13T05:40:54.217632+00:00",
+  "generatedAt": "2026-06-13T15:40:14.428038+00:00",
   "sources": [
     {
       "path": "proposal.md",
       "kind": "proposal",
-      "sha256": "97f66d787df3e66a08a226dfb89d8d0031d7cdee8225d72f10a4c953481a0b7c"
+      "sha256": "e93f2b86157b7fa53a06f5bff75b348fdfebeb7f7ef827188c2ffd2842910f85"
     },
     {
       "path": "design.md",
       "kind": "design",
-      "sha256": "e6c2e1d333d49bf355b5f50816aa0192ce9d2d94af8117e635aa344985b3c76e"
+      "sha256": "dc41494a133b5c41991836a287712357083a17dae383eb999c9c8c75b425b3b1"
     },
     {
       "path": "tasks.md",
       "kind": "tasks",
-      "sha256": "a49cfdd4fbfef8211848f3388dab64ccbf1b78bc6632379698c50ae54e9bb3c2"
+      "sha256": "8fce173cc31aa39b286d4273cdf4e551b36d7727f146120ab2c9a2fa228a5ff3"
     },
     {
       "path": "specs/agent-goal-writer-workflow/spec.md",
       "kind": "spec-delta",
-      "sha256": "435d0b60d1e24e6cd731225c372a4b21b1fe0e8428d667233c0c41d3a990ffc2"
+      "sha256": "8d8c1c6adbd5140c1101ba11fcc5486635e24a541582107907bf730ab057e6da"
     }
   ]
 }
