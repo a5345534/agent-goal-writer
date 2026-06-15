@@ -1,39 +1,41 @@
 # Project Responsibility
 
-Status: authoritative project-boundary document for `goal-spec`.
+Status: authoritative project-boundary document for this repository.
 
-This document defines what this repository owns, what it must not own, and how it hands work to the next repository in the three-stage goal execution pipeline.
+This document defines what this repository owns, what it must not own, and which artifact contracts it must honor. The repository should not need to know which concrete repository implements an upstream or downstream stage.
 
-## Pipeline position
+## Pipeline contract
 
 ```text
-Stage 1: goal-spec   user goal -> OpenSpec change package
-Stage 2: goal-dag    OpenSpec/PRD/design/ticket -> validated Goal DAG JSON + optional trace
-Stage 3: goal-runner Goal DAG JSON -> runtime execution
+Stage 1: Specification Authoring   user intent -> governed specification package
+Stage 2: Execution Planning        specification/development document -> runtime DAG JSON + optional planning trace
+Stage 3: Runtime Execution         runtime DAG JSON or single objective -> durable execution state
 ```
 
-`goal-spec` is Stage 1 only. Its job is to turn a user goal, feature request, bug direction, product idea, or architecture decision into governed OpenSpec source material.
+This repository implements **Stage 1: Specification Authoring**.
+
+It must know the Stage 1 output contract. It may describe downstream handoff evidence. It must not depend on, call into, or name a concrete downstream planning or runtime repository.
 
 ## Owns
 
-`goal-spec` owns:
+This repository owns:
 
-- value challenge before writing a spec;
+- value challenge before writing a specification;
 - discovery, assumptions, alternatives, non-goals, risks, and success signals;
-- OpenSpec change package authoring;
-- OpenSpec proposal/design/tasks/spec-delta structure;
+- governed specification package authoring;
+- proposal/design/tasks/spec-delta structure;
 - `source-manifest.json` creation and validation;
-- optional `change-explainer.html` generation and validation when the target project requires it;
-- Stage 1 operational workflow artifacts under `.goal-spec/`;
-- Execution Handoff Notes as source-grounded evidence for downstream planning.
+- optional human-readable explainer generation and validation when the target project requires it;
+- Stage 1 operational workflow artifacts under local workflow state;
+- execution handoff notes as source-grounded evidence for downstream planning.
 
 ## Does not own
 
-`goal-spec` must not own or perform:
+This repository must not own or perform:
 
-- `GoalDagSpec` creation;
+- runtime DAG spec creation;
 - `.dag.json` or `.trace.json` generation;
-- `/goal` invocation;
+- runtime command invocation;
 - subagent planning or scheduling;
 - model routing;
 - worktree allocation;
@@ -50,11 +52,11 @@ Valid Stage 1 inputs include:
 - bugfix direction;
 - product idea;
 - architecture decision;
-- existing OpenSpec change for update/review/archive-preflight modes.
+- existing specification package for update/review/archive-preflight modes.
 
 ## Outputs
 
-The primary output is:
+The primary output is a governed specification package:
 
 ```text
 openspec/changes/<change-name>/
@@ -81,20 +83,20 @@ The handoff index is:
 Non-authoritative downstream sources are:
 
 - `change-explainer.html`;
-- `.goal-spec/` workflow state;
+- local workflow state;
 - scratch notes;
 - extracted-claim reports;
 - reflection reports;
 - recovery reports;
 - temporary context files.
 
-Non-authoritative files may help humans review context, but downstream planning must not treat them as source-of-truth requirements unless the same claim is preserved in an authoritative OpenSpec source.
+Non-authoritative files may help humans review context, but downstream planning must not treat them as source-of-truth requirements unless the same claim is preserved in an authoritative specification source.
 
-## Handoff to `goal-dag`
+## Handoff contract
 
-When `goal-spec` hands work to `goal-dag`, it must provide a complete OpenSpec change package and a current `source-manifest.json`.
+When this repository hands work to any downstream execution-planning implementation, it must provide a complete governed specification package and a current `source-manifest.json`.
 
-`goal-spec` may add `Execution Handoff Notes` inside `design.md` to help downstream planning. Those notes may describe:
+This repository may add execution handoff notes inside `design.md` to help downstream planning. Those notes may describe:
 
 - candidate execution slices;
 - source-grounded ordering or dependency evidence;
@@ -102,39 +104,39 @@ When `goal-spec` hands work to `goal-dag`, it must provide a complete OpenSpec c
 - execution-affecting open questions;
 - execution non-goals.
 
-`Execution Handoff Notes` must not contain runtime DAG fields or ready-to-execute DAG definitions. In particular, do not write:
+Execution handoff notes must not contain runtime DAG fields or ready-to-execute DAG definitions. In particular, do not write:
 
-- `after` edges as DAG JSON;
-- `modelScenario`;
-- `modelRouting`;
-- `workspaceStrategy`;
-- `completionGates`;
-- node definitions;
+- runtime dependency edges as DAG JSON;
+- model scenario assignments;
+- model routing tables;
+- workspace strategy;
+- completion gates;
+- runtime node definitions;
 - `.dag.json` output;
-- `/goal --dag` commands.
+- runtime execution commands.
 
 ## Drift prevention rules
 
 A change to this repository is suspicious and requires boundary review if it:
 
-- adds a dependency on `goal-dag` or `goal-runner` runtime APIs;
+- adds a dependency on a concrete execution-planning or runtime-execution implementation package;
 - creates or validates `.dag.json` files;
-- invokes `/goal`;
+- invokes runtime execution commands;
 - creates worktrees or subagent sessions;
 - executes validators as runtime controller policy;
 - decides model routing;
-- treats `change-explainer.html` as source of truth;
-- treats `.goal-spec/` state as OpenSpec source of truth;
+- treats human-readable explainers as source of truth;
+- treats local workflow state as governed specification source of truth;
 - moves implementation execution into the Stage 1 workflow.
 
 ## Reviewer checklist
 
-Before merging a change to `goal-spec`, verify:
+Before merging a change to this repository, verify:
 
-- the output is still an OpenSpec change package, not a runtime plan;
+- the output is still a governed specification package, not a runtime plan;
 - authoritative sources remain `proposal.md`, `design.md`, `tasks.md`, and `specs/**/spec.md`;
 - `source-manifest.json` remains the handoff index;
 - no `.dag.json` or `.trace.json` generation was introduced;
-- no `/goal` invocation was introduced;
-- `change-explainer.html` remains non-authoritative;
-- execution handoff content is evidence for `goal-dag`, not a substitute for `goal-dag`.
+- no runtime execution command invocation was introduced;
+- human-readable explainers remain non-authoritative;
+- execution handoff content is evidence for downstream planning, not a substitute for downstream planning.
