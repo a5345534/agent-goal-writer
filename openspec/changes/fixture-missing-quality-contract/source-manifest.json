@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "changeName": "fixture-missing-quality-contract",
+  "generatedAt": "2026-06-20T16:28:59.097114+00:00",
+  "sources": [
+    {
+      "path": "proposal.md",
+      "kind": "proposal",
+      "sha256": "806c790cc1408f7ea96eeb60bae2410e90c61265117c39b83397f32267142de9"
+    },
+    {
+      "path": "design.md",
+      "kind": "design",
+      "sha256": "f8c4ea46f67e1755ca4cba29817a485c1dd622232a332c219185131a43cd316b"
+    },
+    {
+      "path": "tasks.md",
+      "kind": "tasks",
+      "sha256": "52f4c5ec191e2f2de604dfb5f867e132119a422117ca25753207bd6f78afca6e"
+    },
+    {
+      "path": "specs/quality-contract-missing/spec.md",
+      "kind": "spec-delta",
+      "sha256": "efc647103ab4473da7c3b753dbbb8c72487dcbdafda7ab6f5527ca541cdda3e0"
+    }
+  ],
+  "qualityProfiles": [
+    "incremental-implementation",
+    "test-driven-change",
+    "code-review-required",
+    "api-boundary-review",
+    "security-sensitive-review",
+    "performance-sensitive-review",
+    "observability-required",
+    "docs-adr-required",
+    "ship-preflight"
+  ]
+}

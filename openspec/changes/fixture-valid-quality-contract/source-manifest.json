@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "changeName": "fixture-valid-quality-contract",
+  "generatedAt": "2026-06-20T16:28:59.097386+00:00",
+  "sources": [
+    {
+      "path": "proposal.md",
+      "kind": "proposal",
+      "sha256": "0f51c9a1865920a708dca2a381c71f53ef9a181830009c494033b1ed8b5bffcd"
+    },
+    {
+      "path": "design.md",
+      "kind": "design",
+      "sha256": "ebaf5fa16653648245284444be01fbba697c47e5a8a92a0607621959b457a8a8"
+    },
+    {
+      "path": "tasks.md",
+      "kind": "tasks",
+      "sha256": "58fe5d52e7c06d0389de8143e0a2620043e51b6b2f8dcf202d71b21912e86b5e"
+    },
+    {
+      "path": "specs/quality-contract-valid/spec.md",
+      "kind": "spec-delta",
+      "sha256": "c45308b7c23b22aa382bddc8933ab8478764377653694c0a2149ef27179e37c6"
+    }
+  ],
+  "qualityProfiles": [
+    "incremental-implementation",
+    "test-driven-change",
+    "code-review-required",
+    "api-boundary-review",
+    "performance-sensitive-review",
+    "observability-required",
+    "docs-adr-required",
+    "ship-preflight"
+  ],
+  "requiredEvidence": [
+    "validators-ran",
+    "locked-artifacts-unchanged",
+    "implementation-diff-present"
+  ],
+  "reviewPosture": "elevated",
+  "shipPosture": "standard"
+}

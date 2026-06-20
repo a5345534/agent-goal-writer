@@ -1,0 +1,417 @@
+#!/usr/bin/env bash
+# Test runner for quality contract validation
+#
+# Covers:
+#   - validate-quality-profile for a change with an explicit Execution Quality Contract
+#   - validate-quality-profile for a change without a contract but with keyword signals
+#   - validate-quality-profile for a change with no quality signals at all
+#   - validate-source-manifest includes quality profiles when detected
+#   - archive-preflight warns about missing quality profiles
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+OPENSPEC="$SCRIPT_DIR/goal-spec-openspec.py"
+
+PASS=0
+FAIL=0
+SKIP=0
+TOTAL=0
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# --- helpers ---
+
+run_test() {
+    local name="$1"
+    shift
+    TOTAL=$((TOTAL + 1))
+    printf "  %-68s " "$name"
+    if "$@"; then
+        PASS=$((PASS + 1))
+        printf "${GREEN}PASS${NC}\n"
+    else
+        FAIL=$((FAIL + 1))
+        printf "${RED}FAIL${NC}\n"
+    fi
+}
+
+assert_exit() {
+    local expected="$1"
+    local actual="$2"
+    local label="$3"
+    if [[ "$actual" -ne "$expected" ]]; then
+        printf "\n    ${RED}%s: expected exit %d, got %d${NC}\n" "$label" "$expected" "$actual"
+        return 1
+    fi
+    return 0
+}
+
+assert_json_field() {
+    local json="$1"
+    local field="$2"
+    local expected="$3"
+    local label="$4"
+    local actual
+    actual=$(echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$field',''))")
+    if [[ "$actual" != "$expected" ]]; then
+        printf "\n    ${RED}%s: expected '%s', got '%s'${NC}\n" "$label" "$expected" "$actual"
+        return 1
+    fi
+    return 0
+}
+
+assert_json_field_bool() {
+    local json="$1"
+    local field="$2"
+    local expected="$3"
+    local label="$4"
+    local actual
+    actual=$(echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); v=d.get('$field'); print(str(v).lower())")
+    if [[ "$actual" != "$expected" ]]; then
+        printf "\n    ${RED}%s: expected '%s', got '%s'${NC}\n" "$label" "$expected" "$actual"
+        return 1
+    fi
+    return 0
+}
+
+assert_json_list_contains() {
+    local json="$1"
+    local field="$2"
+    local expected_item="$3"
+    local label="$4"
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+items=d.get('$field',[])
+assert '$expected_item' in items, f'{items} does not contain $expected_item'
+" <<<"$json" > /dev/null 2>&1 || {
+        printf "\n    ${RED}%s: list %s does not contain %s${NC}\n" "$label" "$field" "$expected_item"
+        return 1
+    }
+    return 0
+}
+
+# --- test functions ---
+
+test_valid_contract_returns_ok() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-quality-profile fixture-valid-quality-contract --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "valid contract exit" || ok=1
+    assert_json_field "$out" "status" "ok" "status" || ok=1
+    assert_json_field_bool "$out" "hasQualityContract" "true" "hasQualityContract" || ok=1
+    # Verify explicit profiles are present
+    assert_json_list_contains "$out" "explicitProfiles" "incremental-implementation" "explicitProfiles" || ok=1
+    assert_json_list_contains "$out" "explicitProfiles" "test-driven-change" "explicitProfiles" || ok=1
+    assert_json_list_contains "$out" "explicitProfiles" "code-review-required" "explicitProfiles" || ok=1
+    assert_json_list_contains "$out" "explicitProfiles" "api-boundary-review" "explicitProfiles" || ok=1
+    # Verify review posture and ship posture
+    assert_json_field "$out" "reviewPosture" "elevated" "reviewPosture" || ok=1
+    assert_json_field "$out" "shipPosture" "standard" "shipPosture" || ok=1
+    # Verify required evidence
+    assert_json_list_contains "$out" "requiredEvidence" "validators-ran" "requiredEvidence" || ok=1
+    assert_json_list_contains "$out" "requiredEvidence" "locked-artifacts-unchanged" "requiredEvidence" || ok=1
+    assert_json_list_contains "$out" "requiredEvidence" "implementation-diff-present" "requiredEvidence" || ok=1
+    return $ok
+}
+
+test_missing_contract_returns_warning() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-quality-profile fixture-missing-quality-contract --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "missing contract exit" || ok=1
+    assert_json_field "$out" "status" "ok" "status" || ok=1
+    assert_json_field_bool "$out" "hasQualityContract" "false" "hasQualityContract" || ok=1
+    # Verify no explicit profiles
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d.get('explicitProfiles',[]) == []
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}expected empty explicitProfiles${NC}\n"; ok=1; }
+    # Verify resolved profiles exist (keyword-inferred)
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert len(d.get('resolvedProfiles',[])) > 0
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}expected non-empty resolvedProfiles${NC}\n"; ok=1; }
+    # Verify warnings exist
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+warnings = d.get('warnings',[])
+assert len(warnings) > 0
+assert any('explicit' in w.lower() or 'Execution Quality Contract' in w for w in warnings)
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}expected warning about missing explicit contract${NC}\n"; ok=1; }
+    # Verify no review/ship posture since no contract
+    assert_json_field "$out" "reviewPosture" "" "reviewPosture" || ok=1
+    assert_json_field "$out" "shipPosture" "" "shipPosture" || ok=1
+    return $ok
+}
+
+test_source_manifest_includes_quality_for_valid() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-source-manifest fixture-valid-quality-contract --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "valid manifest exit" || ok=1
+    assert_json_field "$out" "status" "ok" "manifest status" || ok=1
+    # Read the manifest file directly to check quality fields
+    python3 -c "
+import json
+with open('$PROJECT_DIR/openspec/changes/fixture-valid-quality-contract/source-manifest.json') as f:
+    m = json.load(f)
+assert m.get('qualityProfiles') is not None
+assert len(m['qualityProfiles']) >= 4
+assert m.get('requiredEvidence') is not None
+assert len(m['requiredEvidence']) >= 2
+assert m.get('reviewPosture') == 'elevated'
+assert m.get('shipPosture') == 'standard'
+" > /dev/null 2>&1 || { printf "\n    ${RED}source-manifest.json missing quality fields${NC}\n"; ok=1; }
+    return $ok
+}
+
+test_source_manifest_includes_quality_for_missing() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-source-manifest fixture-missing-quality-contract --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "missing manifest exit" || ok=1
+    assert_json_field "$out" "status" "ok" "manifest status" || ok=1
+    # Read the manifest file directly to check quality fields
+    python3 -c "
+import json
+with open('$PROJECT_DIR/openspec/changes/fixture-missing-quality-contract/source-manifest.json') as f:
+    m = json.load(f)
+# Should have keyword-inferred profiles
+assert m.get('qualityProfiles') is not None
+assert len(m['qualityProfiles']) > 0
+# Should NOT have review/ship posture since no contract
+assert m.get('reviewPosture', '') == ''
+assert m.get('shipPosture', '') == ''
+" > /dev/null 2>&1 || { printf "\n    ${RED}source-manifest.json invalid for missing contract${NC}\n"; ok=1; }
+    return $ok
+}
+
+test_archive_preflight_checks_quality_for_valid() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" archive-preflight fixture-valid-quality-contract --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Preflight may fail because of unchecked tasks, but should include quality profile check
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+checks = d.get('checks',{})
+assert 'qualityProfile' in checks, 'qualityProfile check must exist'
+qp = checks['qualityProfile']
+assert qp.get('status') == 'ok'
+assert qp.get('hasQualityContract') == True
+assert len(qp.get('explicitProfiles',[])) >= 4
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}archive preflight missing quality profile check${NC}\n"; ok=1; }
+    return $ok
+}
+
+test_archive_preflight_warns_for_missing() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" archive-preflight fixture-missing-quality-contract --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+checks = d.get('checks',{})
+assert 'qualityProfile' in checks, 'qualityProfile check must exist'
+qp = checks['qualityProfile']
+assert qp.get('hasQualityContract') == False
+warnings = d.get('warnings',[])
+assert any('add' in w.lower() and 'execution quality contract' in w.lower() for w in warnings) or \
+       qp.get('status') == 'warn'
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}archive preflight missing quality warning${NC}\n"; ok=1; }
+    return $ok
+}
+
+test_nonexistent_change_returns_error() {
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-quality-profile nonexistent-change --project-root "$PROJECT_DIR" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 1 "$rc" "nonexistent change exit" || ok=1
+    assert_json_field "$out" "status" "fail" "status" || ok=1
+    return $ok
+}
+
+test_docs_only_change_no_profiles() {
+    # Create a temporary docs-only fixture to test the isDocsOnly path
+    local tmp
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/openspec/changes/docs-only-test"
+    cat > "$tmp/openspec/changes/docs-only-test/proposal.md" << 'DOCSONLY'
+# docs-only-test
+
+## Why
+
+This is a docs-only change. No code changes, no API changes, no deployment.
+
+## What Changes
+
+- Update README with new instructions.
+
+## Execution Quality Contract
+
+- Quality profiles: 
+- Required evidence: 
+- Review posture: 
+- Ship posture: 
+
+## Success Signal
+
+Documentation updated.
+DOCSONLY
+
+    cat > "$tmp/openspec/changes/docs-only-test/design.md" << 'DOCSDESIGN'
+# Design: docs-only-test
+
+This is a docs-only change. No code, no API, no deployment.
+DOCSDESIGN
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-quality-profile docs-only-test --project-root "$tmp" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Should pass because isDocsOnly=true (no code change = no quality profiles needed)
+    assert_exit 0 "$rc" "docs-only exit" || ok=1
+    assert_json_field "$out" "status" "ok" "status" || ok=1
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d.get('isDocsOnly') == True, f'expected isDocsOnly=True, got {d}'
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}expected isDocsOnly=True${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_default_discipline_profiles_always_present() {
+    # Create a temporary fixture with minimal content and no quality keywords.
+    # Even without keywords, non-docs-only changes get default discipline profiles.
+    local tmp
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/openspec/changes/default-discipline-test"
+    # Use only words that won't trigger ANY keyword pattern
+    cat > "$tmp/openspec/changes/default-discipline-test/proposal.md" << 'DEFAULT'
+# default-discipline-test
+
+## Why
+
+Tidy up helper code.
+
+## What Changes
+
+- Move a few helper functions.
+- Adjust whitespace for consistency.
+
+## Non-Goals
+
+- No behaviour or visible outcome change.
+
+## Success Signal
+
+Helper code is tidier.
+DEFAULT
+
+    cat > "$tmp/openspec/changes/default-discipline-test/design.md" << 'DEFAULTDESIGN'
+# Design: default-discipline-test
+
+Internal tidy-up only.
+DEFAULTDESIGN
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" validate-quality-profile default-discipline-test --project-root "$tmp" --json 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Should pass: non-docs-only changes always get default discipline profiles
+    assert_exit 0 "$rc" "default discipline exit" || ok=1
+    assert_json_field "$out" "status" "ok" "status" || ok=1
+    # Verify the three default discipline profiles are present
+    assert_json_list_contains "$out" "resolvedProfiles" "incremental-implementation" "resolvedProfiles" || ok=1
+    assert_json_list_contains "$out" "resolvedProfiles" "test-driven-change" "resolvedProfiles" || ok=1
+    assert_json_list_contains "$out" "resolvedProfiles" "code-review-required" "resolvedProfiles" || ok=1
+    # Default profiles are keyword-inferred, not explicit
+    python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d.get('explicitProfiles',[]) == []
+assert d.get('hasQualityContract') == False
+" <<<"$out" > /dev/null 2>&1 || { printf "\n    ${RED}expected no explicit profiles${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+# --- main ---
+
+echo ""
+echo "=============================================="
+echo " quality contract validation test suite"
+echo "=============================================="
+echo ""
+
+# Section: validate-quality-profile
+echo "--- validate-quality-profile ---"
+run_test "valid contract returns ok"                          test_valid_contract_returns_ok
+run_test "missing contract returns warning"                   test_missing_contract_returns_warning
+run_test "nonexistent change returns error"                   test_nonexistent_change_returns_error
+run_test "docs-only change has no profiles"                   test_docs_only_change_no_profiles
+run_test "default discipline profiles always present"        test_default_discipline_profiles_always_present
+echo ""
+
+# Section: source-manifest quality
+echo "--- source-manifest with quality ---"
+run_test "valid contract manifest includes quality"           test_source_manifest_includes_quality_for_valid
+run_test "missing contract manifest includes inferred"        test_source_manifest_includes_quality_for_missing
+echo ""
+
+# Section: archive preflight quality
+echo "--- archive-preflight quality checks ---"
+run_test "preflight checks quality for valid contract"        test_archive_preflight_checks_quality_for_valid
+run_test "preflight warns for missing contract"               test_archive_preflight_warns_for_missing
+echo ""
+
+# --- summary ---
+echo "=============================================="
+printf " Results: ${GREEN}%d passed${NC}" "$PASS"
+if [[ "$FAIL" -gt 0 ]]; then
+    printf ", ${RED}%d failed${NC}" "$FAIL"
+fi
+if [[ "$SKIP" -gt 0 ]]; then
+    printf ", ${YELLOW}%d skipped${NC}" "$SKIP"
+fi
+printf " (total %d)\n" "$TOTAL"
+echo "=============================================="
+
+if [[ "$FAIL" -gt 0 ]]; then
+    exit 1
+fi
+exit 0
