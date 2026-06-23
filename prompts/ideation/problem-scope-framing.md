@@ -41,3 +41,56 @@ classify the blocker as `scopeDefinition` and present bounded scope options.
 
 Existing functionality may be mentioned as scope-narrowing context during framing,
 but MUST NOT be used to cancel the user's improvement intent before scope confirmation.
+
+## ALLOWED OUTPUT STRUCTURE
+
+Your user-facing response MUST follow this structure when scope is uncertain or
+NOT confirmed:
+
+```text
+Problem & Scope Framing
+- Intended outcome:
+- Improvement intent:
+- Scope uncertainty:
+- Current baseline / source context:
+
+Neutral scope candidates (not recommendations):
+A. <scope label> — included: / excluded: / success signal: / trade-off: (descriptive only)
+
+Blocking clarification (max 1–2):
+1. <bounded question mapped to blocking field>
+   Options: A / B / C
+
+Not doing yet:
+- no value judgment
+- no no-build recommendation
+- no smaller-scope recommendation
+- no Proposal Meaning Analysis
+- no Spec Kernel or OpenSpec writing
+```
+
+When the user selects a scope but has NOT given `confirm_scope_for_analysis`,
+MUST use:
+
+```text
+Selected scope: <scope summary>
+
+Before Proposal Meaning Analysis, choose exactly one:
+- confirm_scope_for_analysis
+- revise_scope
+- abandon_proposal
+```
+
+## FORBIDDEN IN SCOPE-CONFIRMATION RESPONSES
+
+- Value Challenge sections or headings
+- "Recommended path", "I recommend", "Best option"
+- No-build, smaller-scope, measure-first as recommendations
+- Proposal Meaning Analysis, Spec Kernel, or OpenSpec content
+- Stage 5 approval decision tokens (approve_openspec_authoring, etc.) as valid options
+
+## SCOPE CANDIDATE NEUTRALITY
+
+- Candidates may list included/excluded changes, success signal, and descriptive trade-off.
+- Candidates MUST NOT be labeled "recommended", "best", or "highest value".
+- Trade-off MUST be descriptive (e.g., "smallest change, defers bulk actions") NOT ranking/scoring.

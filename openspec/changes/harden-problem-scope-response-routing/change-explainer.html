@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="openspec-explainer-mode" content="decision-review">
+  <title>harden-problem-scope-response-routing 決策審查</title>
+  <style>
+    :root { color-scheme: light; --bg:#f8fafc; --card:#ffffff; --ink:#172033; --muted:#5b667a; --line:#d9e2ef; --accent:#3157d5; --risk:#b42318; --ok:#087443; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); line-height: 1.6; }
+    header { padding: 2rem clamp(1rem, 4vw, 3rem); background: linear-gradient(135deg, #eaf0ff, #ffffff); border-bottom: 1px solid var(--line); }
+    nav { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem clamp(1rem, 4vw, 3rem); background: rgba(255,255,255,.95); border-bottom: 1px solid var(--line); }
+    nav a, button { border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--accent); padding: .45rem .75rem; text-decoration: none; cursor: pointer; }
+    main { width: min(1180px, 100%); margin: 0 auto; padding: 1rem; }
+    section { background: var(--card); border: 1px solid var(--line); border-radius: 16px; margin: 1rem 0; padding: clamp(1rem, 3vw, 1.5rem); box-shadow: 0 8px 24px rgba(20,40,80,.05); }
+    h1, h2, h3 { line-height: 1.25; }
+    h1 { margin: 0 0 .5rem; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+    .card { border: 1px solid var(--line); border-radius: 12px; padding: 1rem; background: #fbfdff; }
+    .tag { display: inline-block; border-radius: 999px; padding: .2rem .55rem; background: #eef3ff; color: var(--accent); font-size: .85rem; }
+    .risk-high { border-left: 5px solid var(--risk); }
+    .ok { color: var(--ok); font-weight: 700; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background:#0f172a; color:#e2e8f0; border-radius:12px; padding:1rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid var(--line); padding: .65rem; vertical-align: top; }
+    th { background: #f1f5ff; text-align: left; }
+    svg { max-width: 100%; height: auto; }
+    @media (max-width: 760px) { .grid, .cards { grid-template-columns: 1fr; } nav { position: static; } table { display:block; overflow-x:auto; } }
+  </style>
+</head>
+<body>
+<header>
+  <span class="tag">OpenSpec Change Explainer</span>
+  <h1>harden-problem-scope-response-routing</h1>
+  <p>決策審查頁：把 Problem & Scope Confirmation Flow 的黑箱測試結論寫成可審查的 Stage 1 流程強化變更。</p>
+</header>
+<nav role="navigation" aria-label="primary navigation">
+  <a href="#why">Why</a><a href="#what-changes">What Changes</a><a href="#before-after">Before/After</a><a href="#flow">Flow</a><a href="#decisions">決策點</a><a href="#implementation-slices">實作切片</a><a href="#verification-plan">驗證</a><a href="#risk-register">風險</a><a href="#agent-prompts">Agent Prompts</a>
+</nav>
+<main>
+  <section id="why">
+    <h2>為什麼需要這個變更</h2>
+    <p>黑箱測試顯示，雖然文件與 helper 已定義 Stage 1.5–1.7 的 Problem & Scope Confirmation Flow，但 agent 的自然語言第一回覆仍可能在 gate 執行前提前進入 Value Challenge、推薦 no-build / smaller-scope、接受錯誤 gate decision，或聲稱 artifact 已記錄。</p>
+    <p>此變更的核心目標是讓第一回覆也遵守「scope closure before value judgment」，把提示詞規範、狀態路由、固定模板、response lint 與回歸測試串成可審查的合約。</p>
+  </section>
+
+  <section id="what-changes">
+    <h2>What Changes</h2>
+    <div class="cards">
+      <div class="card"><h3>First-response router</h3><p>在輸出分析前，先依 scope uncertainty、scope selection、Stage 1.7 decision、digest freshness 決定允許輸出的內容。</p></div>
+      <div class="card"><h3>Framing-only template</h3><p>Stage 1.5 僅能列中立 scope candidates 與 bounded clarification，不得推薦 no-build 或 smaller-scope。</p></div>
+      <div class="card"><h3>Regression + response lint</h3><p>用十個黑箱案例鎖住 premature value judgment、錯 gate decision、missing inputDigests 等行為。</p></div>
+    </div>
+  </section>
+
+  <section id="before-after">
+    <h2>Before / After</h2>
+    <table>
+      <thead><tr><th>變更前 Before</th><th>變更後 After</th></tr></thead>
+      <tbody>
+        <tr><td>Scope 不確定時可能直接出現 Value Challenge 或 recommended path。</td><td>只能輸出 Problem & Scope Framing 或 bounded clarification。</td></tr>
+        <tr><td>使用者選 scope 後可能被當成已確認。</td><td>必須要求三選一：<code>confirm_scope_for_analysis</code>、<code>revise_scope</code>、<code>abandon_proposal</code>。</td></tr>
+        <tr><td>Stage 1.7 可能誤收 <code>approve_openspec_authoring</code>。</td><td>明確拒絕 Stage 5 approval-type decision，並重列 Stage 1.7 有效選項。</td></tr>
+        <tr><td>沒有寫檔時仍可能說 recorded / gate passes。</td><td>未驗證 artifact 時只能說 would record / next artifact would be。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="flow">
+    <h2>Flow / 架構視覺</h2>
+    <svg viewBox="0 0 900 260" role="img" aria-label="Stage 1.5 to 2 routing flow">
+      <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#3157d5"/></marker></defs>
+      <rect x="30" y="40" width="170" height="70" rx="12" fill="#eef3ff" stroke="#3157d5"/><text x="50" y="80" font-size="16">1.5 Framing only</text>
+      <rect x="250" y="40" width="170" height="70" rx="12" fill="#fff" stroke="#3157d5"/><text x="270" y="72" font-size="16">1.6 Scope</text><text x="270" y="94" font-size="16">Closure Gate</text>
+      <rect x="470" y="20" width="170" height="70" rx="12" fill="#fff7ed" stroke="#d97706"/><text x="490" y="55" font-size="16">1.6-1 Bounded</text><text x="490" y="77" font-size="16">Clarification</text>
+      <rect x="470" y="150" width="170" height="70" rx="12" fill="#ecfdf3" stroke="#087443"/><text x="490" y="183" font-size="16">1.7 User Gate</text><text x="490" y="205" font-size="14">confirm/revise/abandon</text>
+      <rect x="700" y="150" width="170" height="70" rx="12" fill="#eef3ff" stroke="#3157d5"/><text x="720" y="188" font-size="16">2. PMA unlocked</text>
+      <line x1="200" y1="75" x2="250" y2="75" stroke="#3157d5" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="420" y1="75" x2="470" y2="60" stroke="#3157d5" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="420" y1="85" x2="470" y2="175" stroke="#3157d5" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="640" y1="185" x2="700" y2="185" stroke="#3157d5" stroke-width="3" marker-end="url(#arrow)"/>
+      <path d="M555 90 C555 125 170 135 115 110" fill="none" stroke="#d97706" stroke-width="3" marker-end="url(#arrow)"/>
+    </svg>
+  </section>
+
+  <section id="affected-surfaces">
+    <h2>Affected Surfaces</h2>
+    <ul>
+      <li><code>SKILL.md</code>：放入前置 router 與模板，且要早於一般 value challenge 指引。</li>
+      <li><code>docs/problem-scope-confirmation-flow.md</code>：補 routing matrix 與中立候選 scope 定義。</li>
+      <li><code>prompts/ideation/*</code>：強化 framing-only 與 bounded clarification prompt。</li>
+      <li><code>scripts/goal-spec-workflow</code> / tests：加入 next-step、response lint 或黑箱 fixture。</li>
+    </ul>
+  </section>
+
+  <section id="scope-boundaries">
+    <h2>Scope Boundaries</h2>
+    <p>本 change 只處理 Stage 1.5–1.7 第一回覆與相關驗證。它不移除後續 value assessment；no-build / smaller-scope 仍可在 scope confirmed 且進入正確分析階段後使用。</p>
+  </section>
+
+  <section id="decisions">
+    <h2>Decision Points / 決策點</h2>
+    <div class="grid">
+      <div class="card"><h3>D1：Router 先於自由回覆</h3><p><strong>Recommendation:</strong> 採用 routing matrix。Trade-off 是 prompt 較硬，但能直接阻止測試失敗模式。</p></div>
+      <div class="card"><h3>D2：候選 scope 不是推薦</h3><p>允許列 options，但禁止 best/recommended/no-build/smaller-scope recommendation。</p></div>
+      <div class="card"><h3>D3：Persisted-state honesty</h3><p>沒有 artifact 就不得說 gate passed 或 recorded，只能說 would route / would record。</p></div>
+      <div class="card"><h3>D4：Response lint</h3><p>用 forbidden/required markers 測第一回覆，補足 helper artifact gate 之前的空窗。</p></div>
+    </div>
+  </section>
+
+  <section id="implementation-slices">
+    <h2>Implementation Slices / 實作切片</h2>
+    <ol>
+      <li><strong>Skill/docs contract:</strong> 更新 SKILL、docs、prompts；acceptance criteria 是測試案例 1/3/4/5/9 不再違規。</li>
+      <li><strong>Helper routing/lint:</strong> 新增或強化 next-step / response lint；acceptance criteria 是 Stage 1.7 invalid approval 被拒絕。</li>
+      <li><strong>Regression tests:</strong> 加十個黑箱 fixture；dependencies 是先確認 router semantics。</li>
+    </ol>
+  </section>
+
+  <section id="verification-plan">
+    <h2>Verification Plan / 驗證計畫</h2>
+    <ul>
+      <li>Run <code>scripts/test-workflow</code>。</li>
+      <li>Run black-box Problem & Scope Confirmation Flow tests against installed skill path。</li>
+      <li>Validate <code>source-manifest.json</code>。</li>
+      <li>Confirm missing <code>inputDigests</code> fails closed。</li>
+    </ul>
+  </section>
+
+  <section id="risk-register">
+    <h2>Risk Register / 風險清單</h2>
+    <button data-filter="high-risk" onclick="document.body.classList.toggle('showHigh')">高風險篩選 high-risk filter</button>
+    <div class="card risk-high"><h3>High-risk：lint 過度阻擋</h3><p>Mitigation：允許 forbidden terms 出現在「Not doing yet」或 invalid-decision 說明中，只阻擋 recommendation / value judgment。</p></div>
+    <div class="card"><h3>Medium：agent 忽略模板</h3><p>Mitigation：將模板放在 skill 前段，並用 installed-skill 黑箱測試驗證。</p></div>
+  </section>
+
+  <section id="rollout">
+    <h2>Rollout</h2>
+    <p>先更新 OpenSpec change 與來源 manifest；實作時依序更新 skill/docs、helper/lint、tests。既有 artifact schema 盡量保持相容，新增欄位需 optional 或 schema-backed。</p>
+  </section>
+
+  <section id="current-status">
+    <h2>Current Status</h2>
+    <p class="ok">Draft change package created. Markdown/spec sources and source manifest are available for review. Implementation tasks remain unchecked until this change is approved and executed.</p>
+  </section>
+
+  <section id="copy-controls">
+    <h2>Copy Controls / 複製</h2>
+    <button class="copy-button" data-copy="summary" onclick="copyText('summary')">複製決策摘要</button>
+    <button class="copy-button" data-copy="task-json" onclick="copyText('task-json')">複製任務 JSON</button>
+    <pre id="summary">Decision summary: harden Stage 1.5-1.7 first-response routing; no value judgment before confirm_scope_for_analysis; reject Stage 5 approvals at Stage 1.7; add response lint and black-box tests.</pre>
+    <pre id="task-json" type="application/json">{"change":"harden-problem-scope-response-routing","tasks":["skill-docs-contract","helper-routing-lint","regression-tests","validation"]}</pre>
+  </section>
+
+  <section id="agent-prompts">
+    <h2>Agent Prompts</h2>
+    <h3>Implementation agent prompt</h3>
+    <pre>Implement the OpenSpec change harden-problem-scope-response-routing. Update SKILL.md, docs, prompts, workflow helper routing/lint, and tests while preserving Stage 1 boundaries.</pre>
+    <h3>Review agent prompt</h3>
+    <pre>Review whether Stage 1.5-1.7 responses now obey framing-only routing, bounded clarification, Stage 1.7 decision validation, and persisted-state honesty.</pre>
+    <h3>Verification agent prompt</h3>
+    <pre>Run scripts/test-workflow and the ten black-box Problem & Scope Confirmation Flow tests. Fail if pre-confirmation responses recommend no-build/smaller-scope or emit Spec Kernel/PMA.</pre>
+  </section>
+</main>
+<script>
+function copyText(id) {
+  const el = document.getElementById(id);
+  const text = el ? el.innerText : '';
+  if (navigator.clipboard) navigator.clipboard.writeText(text);
+}
+</script>
+</body>
+</html>

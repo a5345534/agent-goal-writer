@@ -2317,6 +2317,138 @@ def cmd_complete_step(args):
     return EXIT_PASS
 
 
+def cmd_lint_response(args):
+    """Lint a natural-language response against stage-specific routing rules.
+
+    Returns exit 0 (pass) or 20 (blocked/fail) with JSON report.
+    """
+    # read response text
+    if args.response_file:
+        try:
+            response = Path(args.response_file).read_text()
+        except Exception as exc:
+            dump(json_report("lint-response","invalid_artifact","read_error",EXIT_INVALID_ARTIFACT,errors=[str(exc)]))
+            return EXIT_INVALID_ARTIFACT
+    elif args.response_text:
+        response = args.response_text
+    else:
+        # read from stdin if no explicit input
+        response = sys.stdin.read()
+
+    if not response.strip():
+        dump(json_report("lint-response","invalid_artifact","empty_response",EXIT_INVALID_ARTIFACT,errors=["No response text provided"]))
+        return EXIT_INVALID_ARTIFACT
+
+    stage = args.stage
+    forbidden: list[str] = []
+    missing_required: list[str] = []
+    detected_stage = "unknown"
+
+    # ── pre-confirmation checks ──
+    if stage == "pre-confirmation":
+        detected_stage = "pre-confirmation"
+        # Check for "Not doing yet" section first — if present, treat as framing discipline
+        has_not_doing_yet = bool(re.search(r'(?i)not doing yet', response))
+
+        # Always check for overt recommendations (even in clean responses)
+        overt_recommendation_patterns = [
+            (r'(?i)\bI recommend\b', 'I recommend'),
+            (r'(?i)\bmy recommendation\b', 'my recommendation'),
+            (r'(?i)\brecommended path\b', 'recommended path'),
+            (r'(?i)\bbest option\b', 'best option'),
+            (r'(?i)\bhighest[- ]?value\b', 'highest value'),
+            (r'(?i)\brecommend\s+no[- ]build\b', 'recommend no-build'),
+            (r'(?i)\brecommend\s+a?\s*smaller[- ]scope\b', 'recommend smaller-scope'),
+            (r'(?i)\brecommend\s+measure[- ]first\b', 'recommend measure-first'),
+        ]
+        for pat, label in overt_recommendation_patterns:
+            if re.search(pat, response):
+                forbidden.append(label)
+
+        # Generic forbidden terms — only flag if NOT in a "Not doing yet" section
+        if not has_not_doing_yet:
+            generic_patterns = [
+                (r'\bno[- ]build\b', 'no-build mention'),
+                (r'\bsmaller[- ]scope\b', 'smaller-scope mention'),
+                (r'\bmeasure[- ]first\b', 'measure-first mention'),
+                (r'(?i)\bvalue challenge\b', 'Value Challenge'),
+                (r'(?i)\bproposal meaning analysis\b', 'Proposal Meaning Analysis'),
+                (r'(?i)\bspec kernel\b', 'Spec Kernel'),
+            ]
+            for pat, label in generic_patterns:
+                if re.search(pat, response, re.IGNORECASE):
+                    forbidden.append(label)
+
+        # check for "Not doing yet" section as evidence of framing-only discipline
+        if not has_not_doing_yet:
+            missing_required.append("Not doing yet section")
+
+    # ── scope-selected checks ──
+    elif stage == "scope-selected":
+        detected_stage = "scope-selected"
+        # must include all three valid decisions
+        required_decisions = ["confirm_scope_for_analysis", "revise_scope", "abandon_proposal"]
+        for d in required_decisions:
+            if d not in response:
+                missing_required.append(f"decision token: {d}")
+        # must NOT contain approval-type decisions as valid options
+        invalid_approval = ["approve_openspec_authoring", "approve_smaller_scope_openspec_authoring", "accept_no_build_recommendation"]
+        for d in invalid_approval:
+            if d in response:
+                forbidden.append(f"Stage 5 approval token as option: {d}")
+        # must not contain PMA, Spec Kernel, OpenSpec as premature content
+        # Allow "Before Proposal Meaning Analysis" as framing phrase
+        pma_bad = re.search(r'(?i)\bproposal meaning analysis\b', response)
+        if pma_bad:
+            before = response[max(0, pma_bad.start()-20):pma_bad.end()]
+            if 'before' not in before.lower():
+                forbidden.append("premature Proposal Meaning Analysis content")
+        for pat, label in [(r'(?i)\bspec kernel\b', 'Spec Kernel'), (r'(?i)\bopenspec writing\b', 'OpenSpec writing')]:
+            if re.search(pat, response):
+                forbidden.append(f"premature content: {label}")
+
+    # ── invalid-decision checks ──
+    elif stage == "invalid-decision":
+        detected_stage = "invalid-decision"
+        # must contain rejection + valid Stage 1.7 choices
+        if "reject" not in response.lower() and "invalid" not in response.lower():
+            missing_required.append("rejection of invalid decision")
+        for d in ["confirm_scope_for_analysis", "revise_scope", "abandon_proposal"]:
+            if d not in response:
+                missing_required.append(f"valid Stage 1.7 decision: {d}")
+
+    # ── digest-check ──
+    elif stage == "digest-check":
+        detected_stage = "digest-check"
+        # must block / fail on missing digests
+        if not any(tok in response.lower() for tok in ["inputdigests", "input digests", "digest", "freshness", "stale"]):
+            missing_required.append("mention of missing inputDigests or freshness failure")
+        if not any(tok in response.lower() for tok in ["fail", "block", "not acceptable", "reject", "invalid", "cannot accept"]):
+            missing_required.append("blocking/failing language")
+
+    errors: list[str] = []
+    if forbidden:
+        errors.append(f"forbidden_phrases: {', '.join(forbidden)}")
+    if missing_required:
+        errors.append(f"missing_required: {', '.join(missing_required)}")
+
+    passed = not forbidden and not missing_required
+    status = "pass" if passed else "fail"
+    exit_code = EXIT_PASS if passed else EXIT_BLOCKED
+
+    dump(json_report(
+        "lint-response",
+        "pass" if passed else "blocked",
+        status,
+        exit_code,
+        stage=stage,
+        detectedStage=detected_stage,
+        forbidden=forbidden,
+        missingRequired=missing_required,
+    ))
+    return exit_code
+
+
 def cmd_next_step(args):
     root = project_root(args.project_root)
     try: change_name = requested_change_name(args)
@@ -2622,6 +2754,13 @@ def build_parser() -> argparse.ArgumentParser:
     write_spec.add_argument("--acknowledged-by", help="identity recorded for assumption acknowledgement")
     write_spec.add_argument("--legacy-value-gate", action="store_true", help="allow fallback to legacy value-gate.json when canonical artifacts are absent")
     write_spec.set_defaults(func=cmd_write_spec)
+
+    # ── response lint ──
+    lint_resp = subparsers.add_parser("lint-response", parents=[common], help="lint a natural-language response against stage-specific routing rules")
+    lint_resp.add_argument("--response-text", help="plain-text response to lint")
+    lint_resp.add_argument("--response-file", help="read response from file instead of --response-text")
+    lint_resp.add_argument("--stage", required=True, choices=("pre-confirmation","scope-selected","invalid-decision","digest-check"), help="stage context for lint rules")
+    lint_resp.set_defaults(func=cmd_lint_response)
 
     return parser
 

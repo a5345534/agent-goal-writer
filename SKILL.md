@@ -113,7 +113,12 @@ maps them into OpenSpec authoring:
   done-ness clarity, scope honesty, downstream usability, boundary fit, and
   preservation.
 
-## Critical collaborator contract
+### Critical collaborator contract (applies after scope confirmation)
+
+The critical collaborator no-build, smaller-scope, and value challenge protocol
+becomes active ONLY after `problem-scope-user-gate.json` is recorded with
+`confirm_scope_for_analysis`. Before that point, see First-Response State
+Router and Stage 1.5 Framing-Only Output Template.
 
 This skill is accountable for shaping a valuable, reviewable change, not for
 blindly memorializing requested work. Treat the user as the decision owner and
@@ -309,6 +314,70 @@ machine-checkable artifact under `.goal-spec/changes/<change-name>/`.
 Deterministic scripts validate and transition; semantic artifacts are
 produced by role agents (collector, judge, writer, explainer, reviewer).
 
+### First-Response State Router (Stage 1.5–1.7)
+
+Before producing any user-visible analysis, recommendation, or OpenSpec
+content, the agent MUST apply this first-response routing contract:
+
+| Condition | Allowed response |
+| --- | --- |
+| Scope uncertain or `scopeUncertainty=true` | Stage 1.5 Problem & Scope Framing only; if not closed, Stage 1.6-1 bounded clarification request. |
+| User selected a scope but did not provide `confirm_scope_for_analysis` | Summarize selected scope and request exactly `confirm_scope_for_analysis`, `revise_scope`, or `abandon_proposal`. |
+| User provides `confirm_scope_for_analysis` | Stage 2 Proposal Meaning Analysis may proceed, subject to artifact/input availability. |
+| User provides `revise_scope` | Return to Stage 1.5 framing. |
+| User provides `abandon_proposal` | Terminate the proposal; do NOT label it no-build. |
+| User provides Stage 5 approval (e.g., `approve_openspec_authoring`) before Stage 5 | Reject as INVALID for Stage 1.7 and show the three valid Stage 1.7 decisions. |
+| User chooses `continue_discussion` while scope is uncertain | Return to Stage 1.5 framing/clarification, NOT Value & Logic Closure Assessment. |
+| Required `inputDigests` are missing | Block freshness; do NOT accept the artifact. |
+
+### Stage 1.5 Framing-Only Output Template
+
+When scope is uncertain and the user has NOT given `confirm_scope_for_analysis`,
+MUST use this structure and MUST NOT include value judgment, recommendations,
+Proposal Meaning Analysis, Spec Kernel, or OpenSpec writing:
+
+```text
+Problem & Scope Framing
+- Intended outcome: <what the user really wants>
+- Improvement intent: <true/false>
+- Scope uncertainty: <true/false>
+- Current baseline / source context: <summary>
+
+Neutral scope candidates (not recommendations):
+A. <scope label> — included changes / excluded changes / success signal / trade-off (descriptive only)
+B. <scope label> — included changes / excluded changes / success signal / trade-off (descriptive only)
+
+Blocking clarification (max 1–2):
+1. <bounded question mapped to blocking field>
+   Options: A / B / C
+
+Not doing yet:
+- no value judgment
+- no no-build recommendation
+- no smaller-scope recommendation
+- no Proposal Meaning Analysis
+- no Spec Kernel or OpenSpec writing
+```
+
+### Stage 1.7 Scope-Confirmation Response Template
+
+When the user selects a scope but has NOT provided `confirm_scope_for_analysis`,
+MUST use this structure:
+
+```text
+Selected scope: <scope summary>
+
+Before Proposal Meaning Analysis, choose exactly one:
+- confirm_scope_for_analysis
+- revise_scope
+- abandon_proposal
+```
+
+### Persisted-State Honesty
+
+- If the user says "continuing" but no `.goal-spec/changes/<change-name>/workflow-state.json` exists, MUST NOT claim a stage, gate pass, or recorded decision. Say "I do not see persisted workflow state…" or "Based on your message, I would route this to <stage>."
+- When the user asks not to write files, MUST use prospective wording ("would record", "next artifact would be") — NEVER claim "recorded", "created", "gate passes" unless the artifact already exists and is validated.
+
 ### 0. Proposal Intake
 
 Capture the raw proposal as `proposal-intake.json`. Preserve the original
@@ -331,7 +400,25 @@ the user's problem, intended scope, and improvement intent before Proposal
 Meaning Analysis. Output: `problem-scope-framing.json`.
 
 Must not recommend no-build, evaluate value, classify as duplicate, or write
-OpenSpec during this stage.
+OpenSpec during this stage. Scope candidates MAY list included/excluded
+changes, success signal, and descriptive trade-off, but MUST NOT rank, score,
+or recommend any candidate. The response MUST follow the Stage 1.5
+Framing-Only Output Template.
+
+#### Improvement intent rule
+
+If the user expresses intent to improve, complete, refine, or extend,
+`improvementIntent` MUST be true. Existing functionality may be cited as
+baseline context or scope boundary evidence during framing, but MUST NOT be
+used to cancel `improvementIntent` or justify a no-build recommendation before
+scope closure and user confirmation.
+
+#### Scope candidate neutrality
+
+MUST NOT label any candidate as "recommended", "best", "highest value",
+"no-build path", or "smaller-scope recommendation". Trade-off descriptions
+must be descriptive (e.g., "smallest change, defers bulk actions") rather
+than ranking or scoring.
 
 ### 1.6 Scope Closure Gate
 

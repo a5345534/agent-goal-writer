@@ -1638,6 +1638,146 @@ with open('$base/workflow-state.json','w') as f: json.dump(state,f)
     return $ok
 }
 
+test_lint_response_pre_confirmation_blocks_no_build() {
+    # pre-confirmation response containing no-build recommendation must fail lint
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage pre-confirmation --response-text "I recommend no-build for this feature. The existing functionality already handles it." --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint pre-conf no-build exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='fail', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be fail${NC}\n"; ok=1; }
+    echo "$out" | grep -q "forbidden" || { printf "\n    ${RED}lint response missing forbidden phrases${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_blocked_missing_not_doing_yet() {
+    # pre-confirmation response without "Not doing yet" section must fail
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage pre-confirmation --response-text "Here are the scope options. A: filters only. B: filters plus export. I think B is better." --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint pre-conf missing not-doing-yet exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='fail', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be fail${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_scope_selected_requires_confirm_decisions() {
+    # scope-selected response missing confirm_scope_for_analysis must fail
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage scope-selected --response-text "Got it, I chose standard scope. Let me start the spec kernel now." --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint scope-selected missing decisions exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='fail', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be fail${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_invalid_decision_rejected() {
+    # invalid-decision context must contain rejection + valid choices
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage invalid-decision --response-text "I see you chose approve_openspec_authoring. Let me proceed to writing." --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint invalid-decision missing rejection exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='fail', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be fail${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_missing_digest_blocked() {
+    # digest-check context must block when inputDigests missing
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage digest-check --response-text "Everything looks great, let us proceed to Stage 3." --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint digest-check missing blocking exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='fail', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be fail${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_pre_confirmation_clean_pass() {
+    # clean framing-only response should pass
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage pre-confirmation --response-text "Problem & Scope Framing
+- Intended outcome: improve dashboard
+- Improvement intent: true
+- Scope uncertainty: true
+
+Neutral scope candidates:
+A. filters only — included: filters / excluded: bulk,export,analytics
+
+Blocking clarification:
+1. Which scope? Options: A / B
+
+Not doing yet:
+- no value judgment
+- no no-build recommendation
+- no smaller-scope recommendation
+- no Proposal Meaning Analysis
+- no Spec Kernel or OpenSpec writing" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "lint pre-conf clean pass exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='pass', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be pass${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_scope_selected_clean_pass() {
+    # clean scope-confirmation response should pass
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage scope-selected --response-text "Selected scope: standard (filters + sorting)
+
+Before Proposal Meaning Analysis, choose exactly one:
+- confirm_scope_for_analysis
+- revise_scope
+- abandon_proposal" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "lint scope-selected clean pass exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='pass', d.get('result')" 2>/dev/null || { printf "\n    ${RED}lint response result must be pass${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_command_present() {
+    # lint-response command must be registered
+    "$WORKFLOW" --help 2>&1 | grep -q "lint-response" || { printf "\n    ${RED}missing lint-response command${NC}\n"; return 1; }
+    return 0
+}
+
 test_authoring_profile_abstract_model_classes() {
     python3 - <<PY
 import json
@@ -1755,6 +1895,18 @@ run_test "continue_discussion routes to framing"          test_continue_discussi
 run_test "framing-only mode prevents no-build"           test_framing_only_no_no_build
 
 run_test "abstract role -> modelClass mapping" test_authoring_profile_abstract_model_classes
+echo ""
+
+# Section: Response Lint
+echo "--- response-lint ---"
+run_test "lint command registered"                  test_lint_response_command_present
+run_test "pre-conf: blocks no-build recommendation" test_lint_response_pre_confirmation_blocks_no_build
+run_test "pre-conf: requires Not doing yet section"  test_lint_response_blocked_missing_not_doing_yet
+run_test "pre-conf: clean framing-only passes"       test_lint_response_pre_confirmation_clean_pass
+run_test "scope-selected: requires confirm decisions" test_lint_response_scope_selected_requires_confirm_decisions
+run_test "scope-selected: clean confirmation passes" test_lint_response_scope_selected_clean_pass
+run_test "invalid-decision: requires rejection"     test_lint_response_invalid_decision_rejected
+run_test "digest-check: requires blocking language"  test_lint_response_missing_digest_blocked
 echo ""
 
 # --- summary ---

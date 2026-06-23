@@ -23,3 +23,14 @@ Produce `problem-scope-clarification-request.json` with:
 - No value judgment
 - No no-build recommendation
 - No OpenSpec writing
+- No value challenge, no "recommended path", no "smaller-scope recommendation"
+
+## ALLOWED OUTPUT STRUCTURE
+
+```
+Blocking clarification:
+1. <bounded question> (maps to field: <blockingField>)
+   Options: A / B / C
+2. <bounded question> (maps to field: <blockingField>)
+   Options: A / B / C
+```
