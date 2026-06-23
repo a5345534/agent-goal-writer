@@ -206,9 +206,7 @@
         "approve_smaller_scope_openspec_authoring": "spec_kernel",
         "accept_no_build_recommendation": "terminal",
         "abandon_proposal": "terminal",
-        "scope_changed_or_unclear": "problem_scope_framing",
-        "value_evidence_only": "value_logic_closure_assessment",
-        "clarification_answer_only": "value_logic_closure_assessment"
+        "continue_discussion": "problem_scope_framing"
       }
     },
     {
