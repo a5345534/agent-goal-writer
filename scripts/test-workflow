@@ -503,7 +503,7 @@ test_positional_change_uses_workspace_changes_dir() {
     [[ -f "$gate_dir/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing per-change pre-spec-gate.json${NC}\n"; ok=1; }
 
     set +e
-    out=$("$WORKFLOW" write-spec positional-test --project-root "$tmp" 2>&1)
+    out=$("$WORKFLOW" write-spec positional-test --project-root "$tmp" --legacy-value-gate 2>&1)
     rc=$?
     set -e
     assert_exit 0 "$rc" "positional write-spec exit" || ok=1
@@ -1004,7 +1004,7 @@ test_write_spec_before_gate() {
     filled_gate_blocked "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
-    out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" --legacy-value-gate 2>&1)
     rc=$?
     set -e
     local ok=0
@@ -1025,7 +1025,7 @@ test_write_spec_before_gate_proceed_no_ack() {
     filled_gate_proceed "$tmp" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
-    out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" --legacy-value-gate 2>&1)
     rc=$?
     set -e
     local ok=0
@@ -1043,7 +1043,7 @@ test_write_spec_after_pass() {
     filled_gate_pass "$tmp" "ws-pass" "ws-cap" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
-    out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" --legacy-value-gate 2>&1)
     rc=$?
     set -e
     local ok=0
@@ -1087,7 +1087,7 @@ test_write_spec_proceed_with_ack() {
     filled_gate_proceed "$tmp" "ws-ack" "ws-ack-cap" > "$tmp/.goal-spec/value-gate.json"
     local out rc
     set +e
-    out=$("$WORKFLOW" write-spec --project-root "$tmp" \
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" --legacy-value-gate \
         --acknowledge-assumptions --acknowledgement "Proceed accepted for write-spec test." 2>&1)
     rc=$?
     set -e
