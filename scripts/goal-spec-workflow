@@ -25,6 +25,19 @@ LEGACY_ARTIFACT_ROOT = ".writer-workflow"
 CHANGE_ARTIFACTS_DIR = "changes"
 ARTIFACT_DIR = ARTIFACT_ROOT
 VALUE_GATE_FILE = "value-gate.json"
+PROPOSAL_INTAKE_FILE = "proposal-intake.json"
+PROJECT_MODEL_FILE = "project-model.json"
+PROPOSAL_MEANING_ANALYSIS_FILE = "proposal-meaning-analysis.json"
+VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE = "value-logic-closure-assessment.json"
+LOGIC_CLOSURE_GATE_FILE = "logic-closure-gate.json"
+LOGIC_GAP_BRIEF_FILE = "logic-gap-brief.json"
+CLARIFICATION_RESPONSE_FILE = "clarification-response.json"
+CHANGE_VALUE_ASSESSMENT_REPORT_FILE = "change-value-assessment-report.json"
+OPENSPEC_AUTHORING_APPROVAL_GATE_FILE = "openspec-authoring-approval-gate.json"
+SPEC_KERNEL_FILE = "spec-kernel.json"
+ROLE_RUNS_DIR = "role-runs"
+PACKAGE_REVIEW_FILE = "package-review.json"
+HANDOFF_READY_FILE = "handoff-ready.json"
 WORKFLOW_STATE_FILE = "workflow-state.json"
 EXTRACTED_CLAIMS_FILE = "extracted-claims.json"
 REFLECTION_REPORT_FILE = "reflection-report.json"
@@ -46,6 +59,67 @@ RECOVERY_ACTIONS = (
 WORKFLOW_SCHEMA_VERSION = "1.1"
 CLAIM_GRAPH_SCHEMA_VERSION = "1.0"
 CHANGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+# ── Canonical Spec Ideation Authoring Flow constants ──
+
+APPROVAL_DECISIONS = (
+    "continue_discussion",
+    "abandon_proposal",
+    "accept_no_build_recommendation",
+    "approve_smaller_scope_openspec_authoring",
+    "approve_openspec_authoring",
+)
+
+APPROVER_TYPES = ("human", "role", "orchestrator", "policy")
+
+FORBIDDEN_RUNTIME_TOKENS = (
+    ".dag.json", ".trace.json", "GoalDagSpec", "/goal --dag",
+    "workspaceStrategy", "worktreeSlug", "controllerScenario",
+    "defaultSubagentScenario", "completionGates",
+    "runtime node definitions", "subagent scheduling",
+    "worktree allocation", "runtime validation policy",
+    "runtime model binding",
+)
+
+CONCRETE_MODEL_PREFIXES = (
+    "openai-codex/", "deepseek/", "anthropic/", "local-",
+    "openai/", "google/", "meta/", "mistral/", "cohere/", "ai21/",
+)
+
+CONTEXTUAL_MODEL_KEYS = (
+    "model", "modelId", "provider", "providerId",
+    "provider/model", "concrete model", "modelArg", "binding",
+)
+
+ALLOWED_STAGE1_MODELCLASSES = (
+    "evidence-collector", "value-judge", "spec-writer",
+    "explainer-writer", "strict-reviewer",
+)
+
+REQUIRED_FRESHNESS_ARTIFACTS = (
+    PROPOSAL_MEANING_ANALYSIS_FILE,
+    VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE,
+    LOGIC_CLOSURE_GATE_FILE,
+    LOGIC_GAP_BRIEF_FILE,
+    CLARIFICATION_RESPONSE_FILE,
+    CHANGE_VALUE_ASSESSMENT_REPORT_FILE,
+    OPENSPEC_AUTHORING_APPROVAL_GATE_FILE,
+    SPEC_KERNEL_FILE,
+    PRE_SPEC_GATE_FILE,
+    WRITE_SPEC_STATUS_FILE,
+    PACKAGE_REVIEW_FILE,
+    HANDOFF_READY_FILE,
+)
+
+WORKFLOW_STATES = (
+    "proposal_intake", "project_modeled", "proposal_meaning_analyzed",
+    "logic_assessed", "logic_not_closed", "logic_gap_briefed",
+    "clarification_received", "logic_closed", "change_value_reported",
+    "openspec_authoring_approved", "smaller_scope_authoring_approved",
+    "no_build_accepted", "proposal_abandoned", "discussion_continues",
+    "spec_kernel_ready", "pre_spec_passed", "openspec_written",
+    "explainer_written", "package_review_passed", "handoff_ready",
+)
 
 EXIT_PASS = 0
 EXIT_BLOCKED = 20
@@ -1651,9 +1725,57 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
         dump(ack_report)
         return int(ack_code or EXIT_USAGE)
 
+    # ── Canonical write-spec gate check (new flow) ──
+    write_errors: list[str] = []
+    lcg = _load_artifact(base, LOGIC_CLOSURE_GATE_FILE)
+    approval = _load_artifact(base, OPENSPEC_AUTHORING_APPROVAL_GATE_FILE)
+    cvr = _load_artifact(base, CHANGE_VALUE_ASSESSMENT_REPORT_FILE)
+    sk = _load_artifact(base, SPEC_KERNEL_FILE)
+
+    # Only enforce canonical gate check when canonical artifacts exist
+    has_canonical = bool(lcg or approval or cvr or sk)
+    if has_canonical:
+        if not lcg or lcg.get("status") != "closed":
+            write_errors.append("logic-closure-gate.status != closed")
+        if not cvr:
+            write_errors.append(f"{CHANGE_VALUE_ASSESSMENT_REPORT_FILE} not found")
+        else:
+            write_errors.extend(_check_input_digests(cvr, base))
+        if not approval:
+            write_errors.append(f"{OPENSPEC_AUTHORING_APPROVAL_GATE_FILE} not found")
+        elif approval.get("decision") not in ("approve_openspec_authoring", "approve_smaller_scope_openspec_authoring"):
+            write_errors.append(f"approval decision is {approval.get('decision')}, not an authoring approval")
+        else:
+            approval_digest_val = approval.get("inputDigests", {}).get(CHANGE_VALUE_ASSESSMENT_REPORT_FILE, "")
+            if cvr and approval_digest_val != _canonical_json_digest(cvr):
+                write_errors.append("approval gate digest does not match current change value report")
+        if not sk:
+            write_errors.append(f"{SPEC_KERNEL_FILE} not found")
+        # No runtime leakage
+        for fp in base.rglob("*.json"):
+            if "role-runs" in str(fp): continue
+            try: text = fp.read_text()
+            except: continue
+            write_errors.extend(_check_no_runtime_leakage(text, str(fp.relative_to(base))))
+        # No concrete model IDs
+        for fp in base.rglob("*.json"):
+            if "role-runs" in str(fp): continue
+            try: text = fp.read_text()
+            except: continue
+            write_errors.extend(_check_no_concrete_models(text, str(fp.relative_to(base))))
+
+        if write_errors:
+            report = json_report("write-spec", "blocked", "gate_not_passed", EXIT_BLOCKED, errors=write_errors, artifactDir=str(base))
+            add_report_warnings(report, artifact_warnings)
+            write_json(base / WRITE_SPEC_STATUS_FILE, report)
+            write_json(base / STATUS_FILE, report)
+            dump(report)
+            return EXIT_BLOCKED
+
+    # Legacy path: evaluate_gate for backward compatibility
     gate_report, gate_code = evaluate_gate(payload, "write-spec", base)
     add_report_warnings(gate_report, artifact_warnings)
-    if gate_code != EXIT_PASS:
+    if not has_canonical and gate_code != EXIT_PASS:
         write_json(base / WRITE_SPEC_STATUS_FILE, gate_report)
         write_json(base / STATUS_FILE, gate_report)
         dump(gate_report)
@@ -1692,6 +1814,350 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
     dump(report)
     return EXIT_PASS
 
+# ── Canonical flow command handlers ──
+
+def _artifact_dir(root, artifact_dir, change_name):
+    if artifact_dir:
+        base = Path(artifact_dir)
+        if not base.is_absolute():
+            base = root / base
+    else:
+        base = root / ARTIFACT_DIR / CHANGE_ARTIFACTS_DIR / change_name
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+def _load_artifact(base, filename):
+    path = base / filename
+    if not path.exists():
+        return None
+    return read_json(path)
+
+def _canonical_json_digest(data):
+    """SHA-256 over canonical JSON: sorted keys, no trailing newline."""
+    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+def _file_digest(path):
+    """SHA-256 over exact UTF-8 file content."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def _check_input_digests(data, base):
+    errors = []
+    input_digests = data.get("inputDigests", {})
+    if not input_digests:
+        return ["missing inputDigests"]
+    for filename, expected_digest in input_digests.items():
+        path = base / filename
+        if not path.exists():
+            errors.append(f"inputDigest references missing artifact: {filename}")
+            continue
+        if path.suffix == ".json":
+            actual = _canonical_json_digest(read_json(path))
+        else:
+            actual = _file_digest(path)
+        if actual != expected_digest:
+            errors.append(f"stale inputDigest for {filename}")
+    return errors
+
+def _check_no_runtime_leakage(text, path):
+    errors = []
+    text_lower = text.lower()
+    for token in FORBIDDEN_RUNTIME_TOKENS:
+        if token.lower() in text_lower:
+            if "must not" in text_lower or "shall not" in text_lower:
+                continue
+            errors.append(f"{path}: runtime leakage: {token}")
+    return errors
+
+def _check_no_concrete_models(text, path):
+    errors = []
+    for prefix in CONCRETE_MODEL_PREFIXES:
+        if prefix in text:
+            text_lower = text.lower()
+            for ctx_key in CONTEXTUAL_MODEL_KEYS:
+                if ctx_key in text_lower:
+                    errors.append(f"{path}: concrete model ID near '{ctx_key}': {prefix}...")
+                    break
+    return errors
+
+
+def cmd_intake(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("intake","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    proposal = getattr(args,'proposal','') or ''
+    if not proposal.strip():
+        dump(json_report("intake","invalid_artifact","missing_proposal",EXIT_BLOCKED,errors=["--proposal required"]))
+        return EXIT_BLOCKED
+    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"rawProposal":proposal,"source":{"type":"human","id":"user"},"receivedAt":utc_now(),"knownContext":[],"initialUnknowns":[]}
+    write_json(base / PROPOSAL_INTAKE_FILE, artifact)
+    dump(json_report("intake","pass","intake_captured",EXIT_PASS,artifactFile=str(base/PROPOSAL_INTAKE_FILE)))
+    return EXIT_PASS
+
+
+def _validate_artifact_cmd(args, artifact_file, label, required_fields=()):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report(label,"invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    artifact_path = getattr(args,'artifact',None)
+    path = Path(artifact_path) if artifact_path else base / artifact_file
+    if not path.exists():
+        dump(json_report(label,"invalid_artifact","missing",EXIT_INVALID_ARTIFACT,errors=[f"{artifact_file} not found at {path}"]))
+        return EXIT_INVALID_ARTIFACT
+    data = read_json(path)
+    errors = []
+    for field in required_fields:
+        val = data
+        for part in field.split("."):
+            val = val.get(part) if isinstance(val,dict) else None
+        if val is None or (isinstance(val,str) and not val.strip()):
+            errors.append(f"missing required field: {field}")
+    if errors:
+        dump(json_report(label,"invalid_artifact","validation_failed",EXIT_INVALID_ARTIFACT,errors=errors))
+        return EXIT_INVALID_ARTIFACT
+    digest = _canonical_json_digest(data)
+    dump(json_report(label,"pass","validated",EXIT_PASS,artifactFile=str(path),digest=digest))
+    return EXIT_PASS
+
+
+cmd_validate_proposal_intake = lambda args: _validate_artifact_cmd(args, PROPOSAL_INTAKE_FILE, "validate-proposal-intake", ("rawProposal",))
+cmd_validate_project_model = lambda args: _validate_artifact_cmd(args, PROJECT_MODEL_FILE, "validate-project-model", ("projectPurpose","stageBoundary","sourceRefs"))
+cmd_validate_proposal_meaning_analysis = lambda args: _validate_artifact_cmd(args, PROPOSAL_MEANING_ANALYSIS_FILE, "validate-proposal-meaning-analysis", ("proposalSummary","logicDuplicatePoints","logicConflictPoints","logicEnhancementPoints","logicGapPoints","boundaryFit"))
+cmd_validate_value_logic_closure_assessment = lambda args: _validate_artifact_cmd(args, VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE, "validate-value-logic-closure-assessment", ("logicClosure","valueAssessment"))
+
+
+def cmd_logic_closure_gate(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("logic-closure-gate","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    assessment = _load_artifact(base, VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE)
+    if not assessment:
+        dump(json_report("logic-closure-gate","invalid_artifact","missing_assessment",EXIT_INVALID_ARTIFACT,errors=[f"{VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE} not found"]))
+        return EXIT_INVALID_ARTIFACT
+    problems = assessment.get("closureProblems",[])
+    blocking = [p for p in problems if p.get("blocking")]
+    status_val = "not_closed" if blocking else "closed"
+    next_step = "logic_gap_completion" if blocking else "change_value_assessment_report"
+    gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"logic_closure","status":status_val,"closed":status_val=="closed","sourceAssessment":VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE,"inputDigests":{VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE:_canonical_json_digest(assessment)},"blockingFields":[p.get("field","") for p in blocking],"nextStep":next_step,"allowedNextSteps":["logic_gap_completion","change_value_assessment_report"],"reason":"Blocking closure problems found" if blocking else "All closure fields satisfied"}
+    write_json(base / LOGIC_CLOSURE_GATE_FILE, gate)
+    code = EXIT_PASS if status_val == "closed" else EXIT_BLOCKED
+    dump(json_report("logic-closure-gate",status_val,"generated",code,gateFile=str(base/LOGIC_CLOSURE_GATE_FILE),nextStep=next_step))
+    return code
+
+
+cmd_validate_logic_gap_brief = lambda args: _validate_artifact_cmd(args, LOGIC_GAP_BRIEF_FILE, "validate-logic-gap-brief", ("gaps","questionsForDecisionMaker"))
+
+
+def cmd_clarification_response(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("clarification-response","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    answers_raw = getattr(args,'answers','') or ''
+    if not answers_raw.strip():
+        dump(json_report("clarification-response","invalid_artifact","missing_answers",EXIT_BLOCKED,errors=["--answers required"]))
+        return EXIT_BLOCKED
+    try:
+        answers = json.loads(answers_raw) if answers_raw.strip().startswith("[") else (json.loads(Path(answers_raw).read_text()) if Path(answers_raw).exists() else json.loads(answers_raw))
+    except Exception as err:
+        dump(json_report("clarification-response","invalid_artifact","malformed",EXIT_INVALID_ARTIFACT,errors=[str(err)]))
+        return EXIT_INVALID_ARTIFACT
+    gap_brief = _load_artifact(base, LOGIC_GAP_BRIEF_FILE)
+    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"sourceBrief":LOGIC_GAP_BRIEF_FILE,"inputDigests":{LOGIC_GAP_BRIEF_FILE:_canonical_json_digest(gap_brief)} if gap_brief else {},"answeredBy":{"type":"human","id":"user","source":"cli"},"answers":answers if isinstance(answers,list) else [answers],"readyForReassessment":True}
+    write_json(base / CLARIFICATION_RESPONSE_FILE, artifact)
+    dump(json_report("clarification-response","pass","captured",EXIT_PASS,artifactFile=str(base/CLARIFICATION_RESPONSE_FILE)))
+    return EXIT_PASS
+
+
+cmd_validate_change_value_report = lambda args: _validate_artifact_cmd(args, CHANGE_VALUE_ASSESSMENT_REPORT_FILE, "validate-change-value-report", ("verdict","recommendedPath"))
+
+
+def cmd_approval_gate(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("approval-gate","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    decision = getattr(args,'decision','')
+    if decision not in APPROVAL_DECISIONS:
+        dump(json_report("approval-gate","invalid_artifact","invalid_decision",EXIT_USAGE,errors=[f"decision must be in {APPROVAL_DECISIONS}"]))
+        return EXIT_USAGE
+    approver_type = getattr(args,'approved_by_type','human') or 'human'
+    approver_id = getattr(args,'approved_by_id','user') or 'user'
+    rationale = getattr(args,'rationale','') or ''
+    report_artifact = _load_artifact(base, CHANGE_VALUE_ASSESSMENT_REPORT_FILE)
+    if not report_artifact:
+        dump(json_report("approval-gate","invalid_artifact","missing_report",EXIT_INVALID_ARTIFACT,errors=[f"{CHANGE_VALUE_ASSESSMENT_REPORT_FILE} not found"]))
+        return EXIT_INVALID_ARTIFACT
+    gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"openspec_authoring_approval","decision":decision,"allowedDecisions":list(APPROVAL_DECISIONS),"sourceReport":CHANGE_VALUE_ASSESSMENT_REPORT_FILE,"inputDigests":{CHANGE_VALUE_ASSESSMENT_REPORT_FILE:_canonical_json_digest(report_artifact)},"approvedBy":{"type":approver_type,"id":approver_id,"source":"cli"},"approvalRationale":rationale,"approvedScope":getattr(args,'approved_scope',None) or "full","readyForSpecKernel":decision in ("approve_openspec_authoring","approve_smaller_scope_openspec_authoring"),"decidedAt":utc_now()}
+    write_json(base / OPENSPEC_AUTHORING_APPROVAL_GATE_FILE, gate)
+    is_terminal = decision in ("accept_no_build_recommendation","abandon_proposal")
+    dump(json_report("approval-gate",decision,"terminal" if is_terminal else "approved",EXIT_PASS,gateFile=str(base/OPENSPEC_AUTHORING_APPROVAL_GATE_FILE)))
+    return EXIT_PASS
+
+
+def cmd_check_freshness(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("check-freshness","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    errors = []
+    for filename in REQUIRED_FRESHNESS_ARTIFACTS:
+        data = _load_artifact(base, filename)
+        if not data: continue
+        errors.extend(_check_input_digests(data, base))
+    if errors:
+        dump(json_report("check-freshness","stale","digest_mismatch",EXIT_BLOCKED,errors=errors))
+        return EXIT_BLOCKED
+    dump(json_report("check-freshness","fresh","all_digests_match",EXIT_PASS))
+    return EXIT_PASS
+
+
+def cmd_check_no_runtime_leakage(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("check-no-runtime-leakage","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    errors = []
+    for fp in base.rglob("*.json"):
+        if "role-runs" in str(fp): continue
+        try: text = fp.read_text()
+        except: continue
+        errors.extend(_check_no_runtime_leakage(text, str(fp.relative_to(base))))
+    if errors:
+        dump(json_report("check-no-runtime-leakage","leakage_detected","blocked",EXIT_BLOCKED,errors=errors))
+        return EXIT_BLOCKED
+    dump(json_report("check-no-runtime-leakage","clean","no_runtime_leakage",EXIT_PASS))
+    return EXIT_PASS
+
+
+def cmd_check_no_concrete_models(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("check-no-concrete-models","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    errors = []
+    for fp in base.rglob("*.json"):
+        if "role-runs" in str(fp): continue
+        try: text = fp.read_text()
+        except: continue
+        errors.extend(_check_no_concrete_models(text, str(fp.relative_to(base))))
+    if errors:
+        dump(json_report("check-no-concrete-models","concrete_models_detected","blocked",EXIT_BLOCKED,errors=errors))
+        return EXIT_BLOCKED
+    dump(json_report("check-no-concrete-models","clean","no_concrete_models",EXIT_PASS))
+    return EXIT_PASS
+
+
+def cmd_role_start(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("role-start","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    role = getattr(args,'role','') or ''
+    step = getattr(args,'step','') or ''
+    run_id = f"{utc_now().replace(':','').replace('-','').replace('T','-')[:15]}-{role}"
+    role_run = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"runId":run_id,"role":role,"modelClass":{"collector":"evidence-collector","judge":"value-judge","writer":"spec-writer","explainer":"explainer-writer","reviewer":"strict-reviewer"}.get(role,""),"step":step,"status":"complete","startedAt":utc_now(),"boundaryAssertions":{"noValueDecision":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}
+    runs_dir = base / ROLE_RUNS_DIR / role
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    write_json(runs_dir / f"{run_id}.json", role_run)
+    dump(json_report("role-start","pass","recorded",EXIT_PASS,runId=run_id))
+    return EXIT_PASS
+
+
+def cmd_role_complete(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("role-complete","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    role = getattr(args,'role','') or ''
+    step = getattr(args,'step','') or ''
+    run_id = getattr(args,'run_id',None)
+    if not run_id:
+        dump(json_report("role-complete","invalid_artifact","missing_run_id",EXIT_USAGE,errors=["--run-id required"]))
+        return EXIT_USAGE
+    path = base / ROLE_RUNS_DIR / role / f"{run_id}.json"
+    if not path.exists():
+        dump(json_report("role-complete","invalid_artifact","not_found",EXIT_INVALID_ARTIFACT,errors=[f"role-run {run_id} not found"]))
+        return EXIT_INVALID_ARTIFACT
+    data = read_json(path)
+    data["completedAt"] = utc_now()
+    data["status"] = "complete"
+    artifact_name = getattr(args,'artifact',None)
+    if artifact_name:
+        ap = base / artifact_name
+        if ap.exists():
+            data.setdefault("outputArtifacts",[]).append(artifact_name)
+            data.setdefault("outputDigests",{})[artifact_name] = _canonical_json_digest(read_json(ap))
+    write_json(path, data)
+    dump(json_report("role-complete","pass","completed",EXIT_PASS,runId=run_id))
+    return EXIT_PASS
+
+
+def cmd_complete_step(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("complete-step","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    step = getattr(args,'step','') or ''
+    artifact = getattr(args,'artifact',None)
+    state = _load_artifact(base, WORKFLOW_STATE_FILE) or {"schemaVersion":WORKFLOW_SCHEMA_VERSION,"changeName":change_name,"state":step}
+    state["state"] = step
+    if artifact: state.setdefault("artifacts",[]).append(artifact)
+    state["updatedAt"] = utc_now()
+    write_json(base / WORKFLOW_STATE_FILE, state)
+    dump(json_report("complete-step","pass","completed",EXIT_PASS,step=step))
+    return EXIT_PASS
+
+
+def cmd_next_step(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("next-step","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    state = _load_artifact(base, WORKFLOW_STATE_FILE)
+    current = state.get("state","proposal_intake") if state else "proposal_intake"
+    transitions = {"proposal_intake":"project_modeling","project_modeling":"proposal_meaning_analysis","proposal_meaning_analysis":"value_logic_closure_assessment","value_logic_closure_assessment":"logic_closure_gate","logic_closure_gate":"depends_on_gate","logic_gap_completion":"clarification_response","clarification_response":"value_logic_closure_assessment","change_value_assessment_report":"openspec_authoring_approval_gate","openspec_authoring_approval_gate":"depends_on_decision","spec_kernel":"pre_spec_gate","pre_spec_gate":"openspec_writing","openspec_writing":"explainer","explainer":"package_review","package_review":"handoff_ready","handoff_ready":"terminal"}
+    next_s = transitions.get(current,"unknown")
+    if current == "logic_closure_gate":
+        gate = _load_artifact(base, LOGIC_CLOSURE_GATE_FILE)
+        next_s = "change_value_assessment_report" if (gate and gate.get("status")=="closed") else "logic_gap_completion"
+    elif current == "openspec_authoring_approval_gate":
+        gate = _load_artifact(base, OPENSPEC_AUTHORING_APPROVAL_GATE_FILE)
+        if gate:
+            d = gate.get("decision","")
+            next_s = "spec_kernel" if d in ("approve_openspec_authoring","approve_smaller_scope_openspec_authoring") else ("value_logic_closure_assessment" if d=="continue_discussion" else "terminal")
+    dump(json_report("next-step","pass",next_s,EXIT_PASS,current=current,next=next_s))
+    return EXIT_PASS
+
+
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = WorkflowArgumentParser(description="Value-gated workflow helper for goal-spec")
@@ -1704,6 +2170,114 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     common.add_argument("--project-root", default=argparse.SUPPRESS, help="target project root")
     common.add_argument("--artifact-dir", default=argparse.SUPPRESS, help="workflow artifact directory, relative to project root unless absolute")
+
+
+    # ── Canonical flow commands ──
+    intake_cmd = subparsers.add_parser("intake", parents=[common], help="capture raw proposal as proposal-intake.json")
+    intake_cmd.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    intake_cmd.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    intake_cmd.add_argument("--proposal", help="raw proposal text", default="")
+    intake_cmd.set_defaults(func=cmd_intake)
+
+    v_pi = subparsers.add_parser("validate-proposal-intake", parents=[common], help="validate proposal-intake.json")
+    v_pi.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_pi.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_pi.add_argument("--artifact", help="path to artifact file (default: .goal-spec/.../proposal-intake.json)")
+    v_pi.set_defaults(func=cmd_validate_proposal_intake)
+
+    v_pm = subparsers.add_parser("validate-project-model", parents=[common], help="validate project-model.json")
+    v_pm.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_pm.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_pm.add_argument("--artifact", help="path to artifact file")
+    v_pm.set_defaults(func=cmd_validate_project_model)
+
+    v_pma = subparsers.add_parser("validate-proposal-meaning-analysis", parents=[common], help="validate proposal-meaning-analysis.json")
+    v_pma.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_pma.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_pma.add_argument("--artifact", help="path to artifact file")
+    v_pma.set_defaults(func=cmd_validate_proposal_meaning_analysis)
+
+    v_vlca = subparsers.add_parser("validate-value-logic-closure-assessment", parents=[common], help="validate value-logic-closure-assessment.json")
+    v_vlca.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_vlca.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_vlca.add_argument("--artifact", help="path to artifact file")
+    v_vlca.set_defaults(func=cmd_validate_value_logic_closure_assessment)
+
+    lcg = subparsers.add_parser("logic-closure-gate", parents=[common], help="generate logic-closure-gate.json from assessment")
+    lcg.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    lcg.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    lcg.set_defaults(func=cmd_logic_closure_gate)
+
+    v_lgb = subparsers.add_parser("validate-logic-gap-brief", parents=[common], help="validate logic-gap-brief.json")
+    v_lgb.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_lgb.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_lgb.add_argument("--artifact", help="path to artifact file")
+    v_lgb.set_defaults(func=cmd_validate_logic_gap_brief)
+
+    cr = subparsers.add_parser("clarification-response", parents=[common], help="capture decision maker answers to gap questions")
+    cr.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    cr.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    cr.add_argument("--answers", help="JSON answers array or path to JSON file", default="")
+    cr.set_defaults(func=cmd_clarification_response)
+
+    v_cvr = subparsers.add_parser("validate-change-value-report", parents=[common], help="validate change-value-assessment-report.json")
+    v_cvr.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_cvr.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_cvr.add_argument("--artifact", help="path to artifact file")
+    v_cvr.set_defaults(func=cmd_validate_change_value_report)
+
+    ag = subparsers.add_parser("approval-gate", parents=[common], help="record OpenSpec authoring approval decision")
+    ag.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    ag.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    ag.add_argument("--decision", required=True, help="approval decision", choices=APPROVAL_DECISIONS)
+    ag.add_argument("--approved-by-type", default="human", help="approver type")
+    ag.add_argument("--approved-by-id", default="user", help="approver id")
+    ag.add_argument("--approved-scope", help="scope for smaller-scope approval")
+    ag.add_argument("--rationale", default="", help="approval rationale")
+    ag.set_defaults(func=cmd_approval_gate)
+
+    rs = subparsers.add_parser("role-start", parents=[common], help="record role-run start")
+    rs.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    rs.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    rs.add_argument("--role", required=True, help="role name (collector, judge, writer, explainer, reviewer)")
+    rs.add_argument("--step", required=True, help="workflow step name")
+    rs.set_defaults(func=cmd_role_start)
+
+    rc = subparsers.add_parser("role-complete", parents=[common], help="record role-run completion")
+    rc.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    rc.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    rc.add_argument("--role", required=True, help="role name")
+    rc.add_argument("--step", required=True, help="workflow step name")
+    rc.add_argument("--run-id", help="run id from role-start")
+    rc.add_argument("--artifact", help="output artifact filename")
+    rc.set_defaults(func=cmd_role_complete)
+
+    cs = subparsers.add_parser("complete-step", parents=[common], help="record workflow step completion")
+    cs.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    cs.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    cs.add_argument("--step", required=True, help="workflow state name")
+    cs.add_argument("--artifact", help="output artifact filename")
+    cs.set_defaults(func=cmd_complete_step)
+
+    ns = subparsers.add_parser("next-step", parents=[common], help="compute next workflow step")
+    ns.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    ns.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    ns.set_defaults(func=cmd_next_step)
+
+    cf = subparsers.add_parser("check-freshness", parents=[common], help="check artifact digest chain freshness")
+    cf.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    cf.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    cf.set_defaults(func=cmd_check_freshness)
+
+    cnrl = subparsers.add_parser("check-no-runtime-leakage", parents=[common], help="scan for runtime-owned outputs in Stage 1 artifacts")
+    cnrl.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    cnrl.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    cnrl.set_defaults(func=cmd_check_no_runtime_leakage)
+
+    cncm = subparsers.add_parser("check-no-concrete-models", parents=[common], help="scan for concrete model IDs in Stage 1 artifacts")
+    cncm.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    cncm.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    cncm.set_defaults(func=cmd_check_no_concrete_models)
 
     init = subparsers.add_parser("init", parents=[common], help="create .goal-spec artifacts")
     init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .goal-spec/changes/<change-name>/")

@@ -4,7 +4,7 @@
   "title": "OpenSpec Authoring Approval Gate",
   "description": "Deterministic approval decision record. Must reference current report digest. Never uses implementation-execution language.",
   "type": "object",
-  "required": ["schemaVersion", "changeName", "gate", "decision", "approvedBy", "readyForSpecKernel"],
+  "required": ["schemaVersion", "changeName", "gate", "decision", "sourceReport", "inputDigests", "approvedBy", "approvalRationale", "decidedAt", "readyForSpecKernel"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": "1.0" },
