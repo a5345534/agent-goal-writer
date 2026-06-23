@@ -1732,9 +1732,13 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
     cvr = _load_artifact(base, CHANGE_VALUE_ASSESSMENT_REPORT_FILE)
     sk = _load_artifact(base, SPEC_KERNEL_FILE)
 
-    # Only enforce canonical gate check when canonical artifacts exist
+    # Default: strict canonical gate check. Pass --legacy-value-gate to allow
+    # fallback to the old value-gate.json path.
+    use_legacy = getattr(args, 'legacy_value_gate', False)
     has_canonical = bool(lcg or approval or cvr or sk)
-    if has_canonical:
+
+    if not use_legacy:
+        # ── Strict canonical mode (default) ──
         if not lcg or lcg.get("status") != "closed":
             write_errors.append("logic-closure-gate.status != closed")
         if not cvr:
@@ -1765,6 +1769,42 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
             write_errors.extend(_check_no_concrete_models(text, str(fp.relative_to(base))))
 
         if write_errors:
+            report = json_report("write-spec", "blocked", "canonical_gate_not_passed", EXIT_BLOCKED, errors=write_errors, artifactDir=str(base))
+            add_report_warnings(report, artifact_warnings)
+            write_json(base / WRITE_SPEC_STATUS_FILE, report)
+            write_json(base / STATUS_FILE, report)
+            dump(report)
+            return EXIT_BLOCKED
+    elif has_canonical:
+        # ── Legacy mode: canonical check only when artifacts exist ──
+        if not lcg or lcg.get("status") != "closed":
+            write_errors.append("logic-closure-gate.status != closed")
+        if not cvr:
+            write_errors.append(f"{CHANGE_VALUE_ASSESSMENT_REPORT_FILE} not found")
+        else:
+            write_errors.extend(_check_input_digests(cvr, base))
+        if not approval:
+            write_errors.append(f"{OPENSPEC_AUTHORING_APPROVAL_GATE_FILE} not found")
+        elif approval.get("decision") not in ("approve_openspec_authoring", "approve_smaller_scope_openspec_authoring"):
+            write_errors.append(f"approval decision is {approval.get('decision')}, not an authoring approval")
+        else:
+            approval_digest_val = approval.get("inputDigests", {}).get(CHANGE_VALUE_ASSESSMENT_REPORT_FILE, "")
+            if cvr and approval_digest_val != _canonical_json_digest(cvr):
+                write_errors.append("approval gate digest does not match current change value report")
+        if not sk:
+            write_errors.append(f"{SPEC_KERNEL_FILE} not found")
+        for fp in base.rglob("*.json"):
+            if "role-runs" in str(fp): continue
+            try: text = fp.read_text()
+            except: continue
+            write_errors.extend(_check_no_runtime_leakage(text, str(fp.relative_to(base))))
+        for fp in base.rglob("*.json"):
+            if "role-runs" in str(fp): continue
+            try: text = fp.read_text()
+            except: continue
+            write_errors.extend(_check_no_concrete_models(text, str(fp.relative_to(base))))
+
+        if write_errors:
             report = json_report("write-spec", "blocked", "gate_not_passed", EXIT_BLOCKED, errors=write_errors, artifactDir=str(base))
             add_report_warnings(report, artifact_warnings)
             write_json(base / WRITE_SPEC_STATUS_FILE, report)
@@ -1772,10 +1812,10 @@ def cmd_write_spec(args: argparse.Namespace) -> int:
             dump(report)
             return EXIT_BLOCKED
 
-    # Legacy path: evaluate_gate for backward compatibility
+    # Legacy fallback: evaluate_gate
     gate_report, gate_code = evaluate_gate(payload, "write-spec", base)
     add_report_warnings(gate_report, artifact_warnings)
-    if not has_canonical and gate_code != EXIT_PASS:
+    if use_legacy and not has_canonical and gate_code != EXIT_PASS:
         write_json(base / WRITE_SPEC_STATUS_FILE, gate_report)
         write_json(base / STATUS_FILE, gate_report)
         dump(gate_report)
@@ -2316,6 +2356,7 @@ def build_parser() -> argparse.ArgumentParser:
     write_spec.add_argument("--acknowledge-assumptions", action="store_true", help="explicitly accept proceed_with_assumptions risk")
     write_spec.add_argument("--acknowledgement", help="acknowledgement rationale required with --acknowledge-assumptions")
     write_spec.add_argument("--acknowledged-by", help="identity recorded for assumption acknowledgement")
+    write_spec.add_argument("--legacy-value-gate", action="store_true", help="allow fallback to legacy value-gate.json when canonical artifacts are absent")
     write_spec.set_defaults(func=cmd_write_spec)
 
     return parser
