@@ -1,0 +1,2053 @@
+#!/usr/bin/env bash
+# Comprehensive test suite for goal-spec covering:
+#   - Canonical artifact validators (value-gate schema, source-manifest schema)
+#   - Logic closure paths (placeholder detection, field_status, boundary validation)
+#   - Approval decisions (acknowledgement edge cases, compound gate scenarios)
+#   - Write-spec gating (extended edge cases)
+#   - Role-run audit (profile schema validation, separation rules)
+#   - Deterministic command audit (exit code stability, JSON structure stability)
+#   - Boundary validators (malformed JSON, missing fields, invalid values)
+#   - Digest canonicalization (sha256 stability, manifest digest matching)
+#   - Package validation (propose, build-manifest, validate-manifest, archive-preflight)
+#
+# Deterministic validation: every subcommand emits stable JSON exit codes.
+# This runner verifies both exit codes and key fields in the output payload.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKFLOW="$SCRIPT_DIR/goal-spec-workflow"
+OPENSPEC="$SCRIPT_DIR/goal-spec-openspec.py"
+
+PASS=0
+FAIL=0
+SKIP=0
+TOTAL=0
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# --- helpers ---
+
+run_test() {
+    local name="$1"
+    shift
+    TOTAL=$((TOTAL + 1))
+    printf "  %-68s " "$name"
+    if "$@"; then
+        PASS=$((PASS + 1))
+        printf "${GREEN}PASS${NC}\n"
+    else
+        FAIL=$((FAIL + 1))
+        printf "${RED}FAIL${NC}\n"
+    fi
+}
+
+assert_exit() {
+    local expected="$1"
+    local actual="$2"
+    local label="$3"
+    if [[ "$actual" -ne "$expected" ]]; then
+        printf "\n    ${RED}%s: expected exit %d, got %d${NC}\n" "$label" "$expected" "$actual"
+        return 1
+    fi
+    return 0
+}
+
+assert_json_field() {
+    local json="$1"
+    local field="$2"
+    local expected="$3"
+    local label="$4"
+    local actual
+    actual=$(echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('$field',''))")
+    if [[ "$actual" != "$expected" ]]; then
+        printf "\n    ${RED}%s: expected '%s', got '%s'${NC}\n" "$label" "$expected" "$actual"
+        return 1
+    fi
+    return 0
+}
+
+assert_json_path() {
+    local json="$1"
+    local path="$2"
+    local expected="$3"
+    local label="$4"
+    local actual
+    actual=$(echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); parts='$path'.split('.'); v=d; [v:=v.get(p,None) for p in parts]; print(v if v is not None else '')")
+    if [[ "$actual" != "$expected" ]]; then
+        printf "\n    ${RED}%s: expected '%s', got '%s'${NC}\n" "$label" "$expected" "$actual"
+        return 1
+    fi
+    return 0
+}
+
+assert_json_contains() {
+    local json="$1"
+    local path="$2"
+    local expected_substring="$3"
+    local label="$4"
+    local actual
+    actual=$(echo "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); parts='$path'.split('.'); v=d; [v:=v.get(p,None) for p in parts]; print(v if v is not None else '')")
+    if [[ "$actual" != *"$expected_substring"* ]]; then
+        printf "\n    ${RED}%s: expected '%s' to contain '%s'${NC}\n" "$label" "$actual" "$expected_substring"
+        return 1
+    fi
+    return 0
+}
+
+# --- Fixtures ---
+
+filled_gate_pass() {
+    local change_name="${1:-test-change}"
+    local capability="${2:-test-capability}"
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+gate = {
+    'schemaVersion': '1.0',
+    'status': 'pass',
+    'changeName': '$change_name',
+    'capability': '$capability',
+    'goal': 'Validate the comprehensive test suite.',
+    'createdAt': now,
+    'updatedAt': now,
+    'valueFrame': {
+        'beneficiary': 'developers using goal-spec',
+        'problemOrOpportunity': 'Comprehensive test coverage is needed.',
+        'whyNow': 'Before the gate can be trusted in production.',
+        'successSignal': 'All test scenarios pass with expected exit codes and JSON outputs.',
+        'costRiskShape': 'Low — script-level tests with fixtures.',
+        'noBuildCandidate': 'Manual spot-checking.',
+        'smallerScopeCandidate': 'Test only exit codes.',
+        'scopeSummary': 'A bash test runner covering comprehensive scenarios.',
+        'verificationPath': 'Run scripts/test-comprehensive and observe no failures.',
+    },
+    'decision': {
+        'rationale': 'The value gate must produce correct, consistent exit codes.',
+        'noBuildConsidered': 'Considered skipping tests.',
+        'smallerScopeConsidered': 'Considered testing only check.',
+    },
+    'constraints': ['Only Python stdlib and bash.'],
+    'nonGoals': ['End-to-end OpenSpec validation (covered by other scripts).'],
+    'assumptions': ['[ASSUMPTION] The workflow helper exit codes are stable.'],
+    'risks': [],
+    'openQuestions': [],
+    'blockers': [],
+    'acknowledgement': {
+        'requiredFor': 'proceed_with_assumptions',
+        'accepted': False,
+        'acceptedAt': '',
+        'acceptedBy': '',
+        'rationale': '',
+    },
+}
+print(json.dumps(gate))
+"
+}
+
+# =====================================================================
+# Section 1: CANONICAL ARTIFACT VALIDATORS
+# =====================================================================
+
+test_value_gate_invalid_schema_version() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "bad-schema" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['schemaVersion'] = '0.9'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "invalid schemaVersion exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+errors = d.get('errors', [])
+assert any('schemaVersion' in e for e in errors), errors
+" > /dev/null 2>&1 || { printf "\n    ${RED}no schemaVersion error${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_value_gate_missing_schema_version() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "no-schema" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+del gate['schemaVersion']
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "missing schemaVersion exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_value_gate_invalid_status() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "bad-status" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'invalid_status_value'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "invalid status exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_value_gate_missing_status() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "no-status" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+del gate['status']
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "missing status exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_value_gate_malformed_json() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "bad-json" --capability "test" --goal "Test." > /dev/null 2>&1
+    echo "this is not json at all {{{" > "$tmp/.goal-spec/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "malformed JSON exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_value_gate_non_object_root() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "array-root" --capability "test" --goal "Test." > /dev/null 2>&1
+    echo '[1, 2, 3]' > "$tmp/.goal-spec/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "non-object root exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_source_manifest_schema_validation() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/schema-test"
+    mkdir -p "$base"
+    echo "# Test proposal" > "$base/proposal.md"
+    echo "# Test design" > "$base/design.md"
+    local hash_p hash_d
+    hash_p=$(python3 -c "import hashlib; print(hashlib.sha256(open('$base/proposal.md','rb').read()).hexdigest())")
+    hash_d=$(python3 -c "import hashlib; print(hashlib.sha256(open('$base/design.md','rb').read()).hexdigest())")
+
+    # Valid manifest
+    python3 -c "
+import json
+manifest = {
+    'schemaVersion': '1.0',
+    'changeName': 'schema-test',
+    'generatedAt': '2024-01-01T00:00:00Z',
+    'sources': [
+        {'path': 'proposal.md', 'kind': 'proposal', 'sha256': '$hash_p'},
+        {'path': 'design.md', 'kind': 'design', 'sha256': '$hash_d'},
+    ],
+}
+json.dump(manifest, open('$base/source-manifest.json', 'w'))
+"
+    local out rc ok=0
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "valid manifest exit" || ok=1
+
+    # Invalid: empty sources
+    echo '{"schemaVersion":"1.0","changeName":"schema-test","generatedAt":"2024-01-01T00:00:00Z","sources":[]}' > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "empty sources exit" || ok=1
+
+    # Invalid: bad sha256
+    echo "{\"schemaVersion\":\"1.0\",\"changeName\":\"schema-test\",\"generatedAt\":\"2024-01-01T00:00:00Z\",\"sources\":[{\"path\":\"proposal.md\",\"kind\":\"proposal\",\"sha256\":\"not-a-valid-sha256\"}]}" > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "bad sha256 exit" || ok=1
+
+    # Invalid: wrong schemaVersion
+    echo "{\"schemaVersion\":\"2.0\",\"changeName\":\"schema-test\",\"generatedAt\":\"2024-01-01T00:00:00Z\",\"sources\":[{\"path\":\"proposal.md\",\"kind\":\"proposal\",\"sha256\":\"$hash_p\"}]}" > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "wrong schemaVersion exit" || ok=1
+
+    # Invalid: path traversal
+    echo "{\"schemaVersion\":\"1.0\",\"changeName\":\"schema-test\",\"generatedAt\":\"2024-01-01T00:00:00Z\",\"sources\":[{\"path\":\"../etc/passwd\",\"kind\":\"proposal\",\"sha256\":\"$hash_p\"}]}" > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "path traversal exit" || ok=1
+
+    # Invalid: absolute path
+    echo "{\"schemaVersion\":\"1.0\",\"changeName\":\"schema-test\",\"generatedAt\":\"2024-01-01T00:00:00Z\",\"sources\":[{\"path\":\"/etc/passwd\",\"kind\":\"proposal\",\"sha256\":\"$hash_p\"}]}" > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "absolute path exit" || ok=1
+
+    # Invalid: bad kind
+    echo "{\"schemaVersion\":\"1.0\",\"changeName\":\"schema-test\",\"generatedAt\":\"2024-01-01T00:00:00Z\",\"sources\":[{\"path\":\"proposal.md\",\"kind\":\"invalid-kind\",\"sha256\":\"$hash_p\"}]}" > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "invalid kind exit" || ok=1
+
+    # Invalid JSON
+    echo "not json" > "$base/source-manifest.json"
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest schema-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "invalid JSON exit" || ok=1
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 2: LOGIC CLOSURE PATHS
+# =====================================================================
+
+test_placeholder_detection_html_tags() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "placeholder-html" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'pass'
+gate['valueFrame']['successSignal'] = '<fill me later>'
+gate['decision']['rationale'] = '<TBD>'
+gate['decision']['noBuildConsidered'] = 'Considered.'
+gate['decision']['smallerScopeConsidered'] = 'Considered.'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "HTML-tag placeholder exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_placeholder_detection_tbd_variants() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "tbd-variants" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'pass'
+gate['valueFrame']['successSignal'] = 'tbd: later'
+gate['decision']['rationale'] = 'TODO - figure it out'
+gate['decision']['noBuildConsidered'] = 'Considered.'
+gate['decision']['smallerScopeConsidered'] = 'Considered.'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "TBD variant placeholder exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_placeholder_detection_mixed_brackets() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "mixed-brackets" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'pass'
+gate['valueFrame']['successSignal'] = 'the <important> signal'
+gate['decision']['rationale'] = 'Good rationale.'
+gate['decision']['noBuildConsidered'] = 'Considered.'
+gate['decision']['smallerScopeConsidered'] = 'Considered.'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "mixed bracket placeholder exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_placeholder_detection_legit_values() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "legit-values" --capability "test" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "legit-values" "test" > "$tmp/.goal-spec/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "legit values exit" || ok=1
+    assert_json_field "$out" "status" "pass" "legit values status" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_validate_name_edge_cases() {
+    local tmp
+    tmp=$(mktemp -d)
+    local ok=0
+
+    for name in "a" "test" "my-change" "change-123" "a-b-c"; do
+        local out rc
+        set +e
+        out=$("$WORKFLOW" init --project-root "$tmp" --change-name "$name" --capability "test" --goal "Test." --force 2>&1)
+        rc=$?
+        set -e
+        if [[ "$rc" -ne 0 ]]; then
+            printf "\n    ${RED}valid name '%s' rejected${NC}\n" "$name"
+            ok=1
+            break
+        fi
+    done
+
+    for name in "" "Bad Name" "UPPERCASE" "_leading-underscore" "-leading-dash" "has spaces" "has.dots"; do
+        local out rc
+        set +e
+        out=$("$WORKFLOW" init --project-root "$tmp" --change-name "$name" --capability "test" --goal "Test." --force 2>&1)
+        rc=$?
+        set -e
+        if [[ "$rc" -eq 0 ]] && [[ -n "$name" ]]; then
+            printf "\n    ${RED}invalid name '%s' accepted${NC}\n" "$name"
+            ok=1
+            break
+        fi
+    done
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_check_blocked_empty_blockers_warning() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "empty-blockers" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'blocked'
+gate['blockers'] = []
+gate['openQuestions'] = []
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 20 "$rc" "blocked empty blockers exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+warnings = d.get('warnings', [])
+assert any('blocked' in w.lower() and ('blocker' in w.lower() or 'question' in w.lower()) for w in warnings), warnings
+" > /dev/null 2>&1 || { printf "\n    ${RED}missing blocked-without-blocker warning${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_pass_with_open_questions_warning() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "pass-q" --capability "test" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "pass-q" "test" > "$tmp/.goal-spec/value-gate.json"
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['openQuestions'] = ['Should this really be pass?']
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "pass with questions exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+warnings = d.get('warnings', [])
+assert any('openquestions' in w.replace(' ','').lower() for w in warnings), warnings
+" > /dev/null 2>&1 || { printf "\n    ${RED}missing open-questions-on-pass warning${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_proceed_with_assumptions_empty_assumptions() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "empty-assumptions" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'proceed_with_assumptions'
+gate['valueFrame']['beneficiary'] = 'devs'
+gate['valueFrame']['problemOrOpportunity'] = 'Need test.'
+gate['valueFrame']['whyNow'] = 'Now.'
+gate['valueFrame']['successSignal'] = 'Signal.'
+gate['valueFrame']['costRiskShape'] = 'Low.'
+gate['valueFrame']['noBuildCandidate'] = 'None.'
+gate['valueFrame']['smallerScopeCandidate'] = 'None.'
+gate['valueFrame']['scopeSummary'] = 'Test.'
+gate['valueFrame']['verificationPath'] = 'Run tests.'
+gate['decision']['rationale'] = 'Testing needed.'
+gate['decision']['noBuildConsidered'] = 'Considered.'
+gate['decision']['smallerScopeConsidered'] = 'Considered.'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "proceed empty assumptions exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 3: APPROVAL DECISIONS
+# =====================================================================
+
+test_acknowledgement_valid_missing_fields() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "bad-ack-fields" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate.update({
+    'status': 'proceed_with_assumptions',
+    'valueFrame': {
+        'beneficiary': 'devs', 'problemOrOpportunity': 'Need test.',
+        'whyNow': 'Now.', 'successSignal': 'Signal.',
+        'costRiskShape': 'Low.', 'noBuildCandidate': 'None.',
+        'smallerScopeCandidate': 'None.', 'scopeSummary': 'Test.',
+        'verificationPath': 'Run tests.',
+    },
+    'decision': {
+        'rationale': 'Testing needed.',
+        'noBuildConsidered': 'Considered.',
+        'smallerScopeConsidered': 'Considered.',
+    },
+    'assumptions': ['[ASSUMPTION] Something might fail.'],
+    'acknowledgement': {
+        'requiredFor': 'proceed_with_assumptions',
+        'accepted': True, 'acceptedAt': '', 'acceptedBy': '', 'rationale': '',
+    },
+})
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 30 "$rc" "ack missing fields exit" || ok=1
+    assert_json_field "$out" "exitCodeName" "acknowledgement_required" "exitCodeName" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_acknowledgement_valid_complete() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "good-ack" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate.update({
+    'status': 'proceed_with_assumptions',
+    'valueFrame': {
+        'beneficiary': 'devs', 'problemOrOpportunity': 'Need test.',
+        'whyNow': 'Now.', 'successSignal': 'Signal.',
+        'costRiskShape': 'Low.', 'noBuildCandidate': 'None.',
+        'smallerScopeCandidate': 'None.', 'scopeSummary': 'Test.',
+        'verificationPath': 'Run tests.',
+    },
+    'decision': {
+        'rationale': 'Testing needed.',
+        'noBuildConsidered': 'Considered.',
+        'smallerScopeConsidered': 'Considered.',
+    },
+    'assumptions': ['[ASSUMPTION] Something might fail.'],
+    'acknowledgement': {
+        'requiredFor': 'proceed_with_assumptions',
+        'accepted': True, 'acceptedAt': now, 'acceptedBy': 'tester',
+        'rationale': 'Accepting for testing purposes.',
+    },
+})
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "complete ack gate exit" || ok=1
+    assert_json_field "$out" "exitCodeName" "pass" "exitCodeName" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_acknowledgement_missing_object() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "no-ack-obj" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate.update({
+    'status': 'proceed_with_assumptions',
+    'valueFrame': {
+        'beneficiary': 'devs', 'problemOrOpportunity': 'Need test.',
+        'whyNow': 'Now.', 'successSignal': 'Signal.',
+        'costRiskShape': 'Low.', 'noBuildCandidate': 'None.',
+        'smallerScopeCandidate': 'None.', 'scopeSummary': 'Test.',
+        'verificationPath': 'Run tests.',
+    },
+    'decision': {
+        'rationale': 'Testing needed.',
+        'noBuildConsidered': 'Considered.',
+        'smallerScopeConsidered': 'Considered.',
+    },
+    'assumptions': ['[ASSUMPTION] Something might fail.'],
+    'acknowledgement': 'not-an-object',
+})
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 30 "$rc" "non-object ack exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 4: DETERMINISTIC COMMAND AUDIT
+# =====================================================================
+
+test_deterministic_check_output() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "det-check" --capability "test" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "det-check" "test" > "$tmp/.goal-spec/value-gate.json"
+    local out1 out2 rc1 rc2
+    set +e
+    out1=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc1=$?
+    out2=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc2=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc1" "first check exit" || ok=1
+    assert_exit 0 "$rc2" "second check exit" || ok=1
+    [[ "$rc1" -eq "$rc2" ]] || { printf "\n    ${RED}exit codes not stable: %d vs %d${NC}\n" "$rc1" "$rc2"; ok=1; }
+    local status1 status2
+    status1=$(echo "$out1" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
+    status2=$(echo "$out2" | python3 -c "import json,sys; print(json.load(sys.stdin).get('status',''))")
+    [[ "$status1" == "$status2" ]] || { printf "\n    ${RED}status not stable: %s vs %s${NC}\n" "$status1" "$status2"; ok=1; }
+    echo "$out1" | python3 -c "import json,sys; json.load(sys.stdin)" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}output 1 is not valid JSON${NC}\n"; ok=1; }
+    echo "$out2" | python3 -c "import json,sys; json.load(sys.stdin)" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}output 2 is not valid JSON${NC}\n"; ok=1; }
+    local sv1 sv2
+    sv1=$(echo "$out1" | python3 -c "import json,sys; print(json.load(sys.stdin).get('schemaVersion',''))")
+    sv2=$(echo "$out2" | python3 -c "import json,sys; print(json.load(sys.stdin).get('schemaVersion',''))")
+    [[ "$sv1" == "1.0" ]] || { printf "\n    ${RED}schemaVersion not 1.0 in output 1${NC}\n"; ok=1; }
+    [[ "$sv2" == "1.0" ]] || { printf "\n    ${RED}schemaVersion not 1.0 in output 2${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_deterministic_gate_output() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "det-gate" --capability "test" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "det-gate" "test" > "$tmp/.goal-spec/value-gate.json"
+    local out1 out2 rc1 rc2
+    set +e
+    out1=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" 2>&1)
+    rc1=$?
+    out2=$("$WORKFLOW" gate --pre-spec --project-root "$tmp" 2>&1)
+    rc2=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc1" "first gate exit" || ok=1
+    assert_exit 0 "$rc2" "second gate exit" || ok=1
+    [[ "$rc1" -eq "$rc2" ]] || { printf "\n    ${RED}gate exit codes not stable${NC}\n"; ok=1; }
+    [[ -f "$tmp/.goal-spec/pre-spec-gate.json" ]] || { printf "\n    ${RED}missing pre-spec-gate.json after gate${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_deterministic_write_spec_output() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "det-write" --capability "det-cap" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "det-write" "det-cap" > "$tmp/.goal-spec/value-gate.json"
+    local out1 rc1
+    set +e
+    out1=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    rc1=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc1" "first write-spec exit" || ok=1
+    echo "$out1" | python3 -c "import json,sys; json.load(sys.stdin)" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}write-spec output not valid JSON${NC}\n"; ok=1; }
+    assert_json_field "$out1" "result" "written" "write result" || ok=1
+    assert_json_field "$out1" "command" "write-spec" "command" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_all_commands_emit_valid_json() {
+    local tmp
+    tmp=$(mktemp -d)
+    local ok=0
+    local commands=(
+        "check --project-root $tmp"
+        "gate --pre-spec --project-root $tmp"
+        "write-spec --project-root $tmp"
+        "phase not-exists --active intake --status active --project-root $tmp"
+    )
+    for cmd in "${commands[@]}"; do
+        local out rc
+        set +e
+        out=$(eval "$WORKFLOW $cmd" 2>&1)
+        rc=$?
+        set -e
+        if ! echo "$out" | python3 -c "import json,sys; json.load(sys.stdin)" > /dev/null 2>&1; then
+            printf "\n    ${RED}command '%s' did not emit valid JSON${NC}\n" "$cmd"
+            ok=1
+            break
+        fi
+    done
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 5: DIGEST CANONICALIZATION
+# =====================================================================
+
+test_sha256_determinism() {
+    local tmp
+    tmp=$(mktemp -d)
+    echo "Hello, World!" > "$tmp/test.txt"
+    local hash1 hash2
+    hash1=$(python3 -c "import hashlib; print(hashlib.sha256(open('$tmp/test.txt','rb').read()).hexdigest())")
+    hash2=$(python3 -c "import hashlib; print(hashlib.sha256(open('$tmp/test.txt','rb').read()).hexdigest())")
+    local ok=0
+    [[ "$hash1" == "$hash2" ]] || { printf "\n    ${RED}sha256 not deterministic${NC}\n"; ok=1; }
+    [[ "$hash1" =~ ^[a-f0-9]{64}$ ]] || { printf "\n    ${RED}invalid sha256 format: $hash1${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_manifest_digest_matches_content() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/digest-test"
+    mkdir -p "$base"
+    echo "# Proposal content v1" > "$base/proposal.md"
+    local hash_v1
+    hash_v1=$(python3 -c "import hashlib; print(hashlib.sha256(open('$base/proposal.md','rb').read()).hexdigest())")
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json build-source-manifest digest-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "build manifest exit" || ok=1
+
+    local manifest_hash
+    manifest_hash=$(python3 -c "
+import json
+manifest = json.load(open('$base/source-manifest.json'))
+src = manifest['sources'][0]
+assert src['path'] == 'proposal.md'
+print(src['sha256'])
+")
+    [[ "$manifest_hash" == "$hash_v1" ]] || { printf "\n    ${RED}manifest digest doesn't match file${NC}\n"; ok=1; }
+
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest digest-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "validate manifest after build exit" || ok=1
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_manifest_detects_stale_digests() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/stale-test"
+    mkdir -p "$base"
+    echo "# Original content" > "$base/proposal.md"
+    local orig_hash
+    orig_hash=$(python3 -c "import hashlib; print(hashlib.sha256(open('$base/proposal.md','rb').read()).hexdigest())")
+
+    python3 -c "
+import json
+manifest = {
+    'schemaVersion': '1.0',
+    'changeName': 'stale-test',
+    'generatedAt': '2024-01-01T00:00:00Z',
+    'sources': [{'path': 'proposal.md', 'kind': 'proposal', 'sha256': '$orig_hash'}],
+}
+json.dump(manifest, open('$base/source-manifest.json', 'w'))
+"
+    local out rc ok=0
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest stale-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "initial validate exit" || ok=1
+
+    echo "# Modified content" > "$base/proposal.md"
+
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest stale-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 1 "$rc" "stale digest detect exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+stale = d.get('stale', [])
+assert len(stale) > 0, f'stale should be non-empty: {d}'
+" > /dev/null 2>&1 || { printf "\n    ${RED}stale digest not detected${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_manifest_detects_missing_source_files() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/missing-src"
+    mkdir -p "$base"
+
+    python3 -c "
+import json
+manifest = {
+    'schemaVersion': '1.0',
+    'changeName': 'missing-src',
+    'generatedAt': '2024-01-01T00:00:00Z',
+    'sources': [{'path': 'proposal.md', 'kind': 'proposal', 'sha256': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}],
+}
+json.dump(manifest, open('$base/source-manifest.json', 'w'))
+"
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest missing-src --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 1 "$rc" "missing source detect exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+missing = d.get('missingSources', [])
+assert len(missing) > 0 or d.get('missingSourceCount', 0) > 0, f'missing sources should be non-empty: {d}'
+" > /dev/null 2>&1 || { printf "\n    ${RED}missing source not detected${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 6: PACKAGE VALIDATION
+# =====================================================================
+
+test_openspec_propose_scaffolds_files() {
+    local tmp
+    tmp=$(mktemp -d)
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json propose propose-test --capability proposed-cap --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "propose exit" || ok=1
+    local base="$tmp/openspec/changes/propose-test"
+    [[ -f "$base/proposal.md" ]] || { printf "\n    ${RED}missing proposal.md${NC}\n"; ok=1; }
+    [[ -f "$base/design.md" ]] || { printf "\n    ${RED}missing design.md${NC}\n"; ok=1; }
+    [[ -f "$base/tasks.md" ]] || { printf "\n    ${RED}missing tasks.md${NC}\n"; ok=1; }
+    [[ -f "$base/specs/proposed-cap/spec.md" ]] || { printf "\n    ${RED}missing spec.md${NC}\n"; ok=1; }
+    [[ -f "$base/source-manifest.json" ]] || { printf "\n    ${RED}missing source-manifest.json${NC}\n"; ok=1; }
+    [[ -f "$base/.openspec.yaml" ]] || { printf "\n    ${RED}missing .openspec.yaml${NC}\n"; ok=1; }
+    local valid_out valid_rc
+    set +e
+    valid_out=$("$OPENSPEC" --json validate-source-manifest propose-test --project-root "$tmp" 2>&1)
+    valid_rc=$?
+    set -e
+    assert_exit 0 "$valid_rc" "validate manifest after propose exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_openspec_propose_rejects_bad_name() {
+    local tmp
+    tmp=$(mktemp -d)
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json propose "Bad Name!" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 1 "$rc" "bad propose name exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_openspec_build_manifest_refreshes_digests() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/refresh-test"
+    mkdir -p "$base/specs/ref-cap"
+    echo "# Proposal v1" > "$base/proposal.md"
+    echo "# Design v1" > "$base/design.md"
+    echo "# Tasks v1" > "$base/tasks.md"
+    echo "# Spec v1" > "$base/specs/ref-cap/spec.md"
+
+    python3 -c "
+import json
+manifest = {
+    'schemaVersion': '1.0',
+    'changeName': 'refresh-test',
+    'generatedAt': '2024-01-01T00:00:00Z',
+    'sources': [{'path': 'proposal.md', 'kind': 'proposal', 'sha256': 'deadbeef' * 8}],
+}
+json.dump(manifest, open('$base/source-manifest.json', 'w'))
+"
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json build-source-manifest refresh-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "build refresh exit" || ok=1
+
+    python3 -c "
+import json
+manifest = json.load(open('$base/source-manifest.json'))
+assert len(manifest['sources']) == 4, f'Expected 4 sources, got {len(manifest[\"sources\"])}'
+" > /dev/null 2>&1 || { printf "\n    ${RED}build did not detect all 4 sources${NC}\n"; ok=1; }
+
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest refresh-test --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "validate after refresh exit" || ok=1
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_openspec_archive_preflight_basic() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/archive-test"
+    mkdir -p "$base/specs/arch-cap"
+
+    cat > "$base/tasks.md" << 'TASKS'
+# Tasks: archive-test
+
+## 1. Implementation
+- [x] 1.1 Done task
+- [x] 1.2 Done task
+
+## 2. Verification
+- [x] 2.1 Verified
+
+## Backlog
+- [ ] [BACKLOG] Future work
+TASKS
+
+    echo "# Proposal" > "$base/proposal.md"
+    echo "# Design" > "$base/design.md"
+    echo "# Spec" > "$base/specs/arch-cap/spec.md"
+
+    "$OPENSPEC" --json build-source-manifest archive-test --project-root "$tmp" > /dev/null 2>&1
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json archive-preflight archive-test --project-root "$tmp" --skip-browser-layout 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Should fail because explainer is required by default but missing
+    [[ "$rc" -ne 0 ]] || { printf "\n    ${RED}archive-preflight should fail without explainer${NC}\n"; ok=1; }
+
+    # Verify output is valid JSON
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+assert 'changeName' in d
+assert 'checks' in d
+assert 'errors' in d
+assert 'status' in d
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}archive-preflight output missing required fields${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_openspec_archive_preflight_unchecked_tasks() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/unchecked-test"
+    mkdir -p "$base/specs/unc-cap"
+
+    cat > "$base/tasks.md" << 'TASKS'
+# Tasks: unchecked-test
+
+## 1. Implementation
+- [x] 1.1 Done
+- [ ] 1.2 NOT DONE
+
+## 2. Verification
+- [ ] 2.1 NOT VERIFIED
+TASKS
+
+    echo "# Proposal" > "$base/proposal.md"
+    echo "# Design" > "$base/design.md"
+    echo "# Spec" > "$base/specs/unc-cap/spec.md"
+
+    "$OPENSPEC" --json build-source-manifest unchecked-test --project-root "$tmp" > /dev/null 2>&1
+
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json archive-preflight unchecked-test --project-root "$tmp" --skip-browser-layout 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    [[ "$rc" -ne 0 ]] || { printf "\n    ${RED}archive-preflight should fail${NC}\n"; ok=1; }
+
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+tasks = d.get('checks', {}).get('tasks', {})
+blocking = tasks.get('blocking', [])
+assert len(blocking) > 0, f'Expected blocking tasks, got {blocking}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}blocking tasks not detected${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_check_change_explainer_compat() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/explainer-test"
+    mkdir -p "$base"
+    echo "# Proposal" > "$base/proposal.md"
+
+    "$OPENSPEC" --json build-source-manifest explainer-test --project-root "$tmp" > /dev/null 2>&1
+
+    local out rc
+    set +e
+    out=$("$SCRIPT_DIR/check-change-explainer.sh" explainer-test --project-root "$tmp" --require-decision-review 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    [[ "$rc" -ne 0 ]] || { printf "\n    ${RED}check-change-explainer should fail without explainer${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 7: ROLE-RUN AUDIT (AUTHORING PROFILE)
+# =====================================================================
+
+test_authoring_profile_validates_against_schema() {
+    local profile_path="$PROJECT_DIR/profiles/goal-spec-authoring-profile.json"
+    local schema_path="$PROJECT_DIR/schemas/goal-spec-authoring-profile.schema.json"
+    local ok=0
+    python3 -c "
+import json
+profile = json.load(open('$profile_path'))
+schema = json.load(open('$schema_path'))
+assert profile['schemaVersion'] == '1.0'
+assert profile['modelClassPolicy']['profileContainsConcreteModels'] == False
+roles = profile['roles']
+assert set(roles.keys()) == {'collector', 'judge', 'writer', 'explainer', 'reviewer'}
+profile_text = open('$profile_path').read()
+concrete_patterns = ['openai/', 'anthropic/', 'deepseek/', 'local-', 'gpt-', 'claude-']
+for pattern in concrete_patterns:
+    assert pattern not in profile_text.lower(), f'Concrete model pattern {pattern} found in profile'
+separation_ids = {rule['id'] for rule in profile['separationRules']}
+assert 'collector-judge-separation' in separation_ids
+assert 'judge-writer-separation' in separation_ids
+for role_name, role in roles.items():
+    assert 'modelClass' in role
+    assert 'purpose' in role
+    assert 'responsibilities' in role
+    assert 'mustNot' in role
+    assert len(role['responsibilities']) > 0
+    assert len(role['mustNot']) > 0
+model_classes = {role['modelClass'] for role in roles.values()}
+assert len(model_classes) == 5, f'Duplicate modelClass values: {model_classes}'
+print('OK')
+" > /dev/null 2>&1 || { printf "\n    ${RED}profile schema validation failed${NC}\n"; ok=1; }
+    return $ok
+}
+
+test_authoring_profile_no_dag_runtime_leakage() {
+    local ok=0
+    python3 -c "
+import json
+from pathlib import Path
+root = Path('$PROJECT_DIR')
+profile = json.load(open(root / 'profiles/goal-spec-authoring-profile.json'))
+# Verify the profile explicitly prohibits DAG/runtime fields in OpenSpec sources
+writer_must_not = profile['roles']['writer']['mustNot']
+assert any('dag' in item.lower() or 'worktree' in item.lower() for item in writer_must_not), \
+    'Writer mustNot should prohibit DAG/worktree fields'
+# Verify modelClassPolicy
+assert profile['modelClassPolicy']['profileContainsConcreteModels'] == False
+assert profile['modelClassPolicy']['concreteResolutionOwner'] == 'goal-runner harness binding catalogs'
+# Check SKILL.md references downstream tools properly
+skill_text = (root / 'SKILL.md').read_text()
+assert 'goal-dag' in skill_text
+assert 'goal-runner' in skill_text
+# Verify the pipeline boundary is documented
+assert 'Stage 1' in skill_text or 'stage 1' in skill_text.lower()
+print('OK')
+" > /dev/null 2>&1 || { printf "\n    ${RED}runtime leakage detected${NC}\n"; ok=1; }
+    return $ok
+}
+
+test_authoring_profile_docs_consistency() {
+    local ok=0
+    python3 -c "
+import json
+from pathlib import Path
+root = Path('$PROJECT_DIR')
+profile = json.load(open(root / 'profiles/goal-spec-authoring-profile.json'))
+roles = profile['roles']
+doc = (root / 'docs/authoring-agent-roles.md').read_text()
+for role_name, role in roles.items():
+    model_class = role['modelClass']
+    assert role_name in doc, f'Role {role_name} not in docs'
+    assert model_class in doc, f'Model class {model_class} not in docs'
+pipeline_doc = (root / 'docs/pipeline-boundaries.md').read_text()
+assert 'Stage 1' in pipeline_doc or 'stage 1' in pipeline_doc.lower()
+assert 'goal-spec' in pipeline_doc
+print('OK')
+" > /dev/null 2>&1 || { printf "\n    ${RED}doc consistency check failed${NC}\n"; ok=1; }
+    return $ok
+}
+
+# =====================================================================
+# Section 8: BOUNDARY VALIDATORS
+# =====================================================================
+
+test_boundary_empty_value_gate() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "empty-gate" --capability "test" --goal "Test." > /dev/null 2>&1
+    echo '{}' > "$tmp/.goal-spec/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "empty gate exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_boundary_missing_value_frame() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "no-vf" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'pass'
+del gate['valueFrame']
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "missing valueFrame exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_boundary_missing_decision() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "no-decision" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'pass'
+gate['valueFrame']['successSignal'] = 'A real signal.'
+gate['valueFrame']['beneficiary'] = 'devs'
+del gate['decision']
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "missing decision exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_boundary_change_name_edge_cases() {
+    local tmp
+    tmp=$(mktemp -d)
+    local ok=0
+
+    local long_name
+    long_name=$(python3 -c "print('a' + '-b' * 100)")
+    local out rc
+    set +e
+    out=$("$WORKFLOW" init --project-root "$tmp" --change-name "$long_name" --capability "test" --goal "Test." --force 2>&1)
+    rc=$?
+    set -e
+    [[ "$rc" -eq 0 ]] || { printf "\n    ${RED}long valid name rejected${NC}\n"; ok=1; }
+
+    set +e
+    out=$("$WORKFLOW" init --project-root "$tmp" --change-name "test--double" --capability "test" --goal "Test." --force 2>&1)
+    rc=$?
+    set -e
+    [[ "$rc" -eq 0 ]] || { printf "\n    ${RED}double-hyphen name rejected${NC}\n"; ok=1; }
+
+    set +e
+    out=$("$WORKFLOW" init --project-root "$tmp" --change-name "test-" --capability "test" --goal "Test." --force 2>&1)
+    rc=$?
+    set -e
+    [[ "$rc" -eq 0 ]] || { printf "\n    ${RED}hyphen-suffix name rejected${NC}\n"; ok=1; }
+
+    set +e
+    out=$("$WORKFLOW" init --project-root "$tmp" --change-name "123test" --capability "test" --goal "Test." --force 2>&1)
+    rc=$?
+    set -e
+    [[ "$rc" -eq 0 ]] || { printf "\n    ${RED}digit-prefix name rejected${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_boundary_phase_invalid_status() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "bad-phase" --capability "test" --goal "Test." > /dev/null 2>&1
+    local out rc
+    set +e
+    out=$("$WORKFLOW" phase bad-phase --active value_challenge --status invalid_status --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    [[ "$rc" -ne 0 ]] || { printf "\n    ${RED}invalid phase status accepted${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_boundary_phase_unknown_phase_id() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "unknown-phase" --capability "test" --goal "Test." > /dev/null 2>&1
+    local out rc
+    set +e
+    out=$("$WORKFLOW" phase unknown-phase --active not_a_real_phase --status active --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    [[ "$rc" -ne 0 ]] || { printf "\n    ${RED}unknown phase id accepted${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 9: WRITE-SPEC GATING (EXTENDED)
+# =====================================================================
+
+test_write_spec_force_overwrite() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "force-ws" --capability "force-cap" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "force-ws" "force-cap" > "$tmp/.goal-spec/value-gate.json"
+
+    local out rc
+    set +e
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "first write exit" || ok=1
+
+    set +e
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 50 "$rc" "second write without force exit" || ok=1
+
+    set +e
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" --force 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "second write with force exit" || ok=1
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_write_spec_preserves_value_gate_data() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "preserve-vg" --capability "preserve-cap" --goal "Preserve test." > /dev/null 2>&1
+    filled_gate_pass "preserve-vg" "preserve-cap" > "$tmp/.goal-spec/value-gate.json"
+
+    local out rc
+    set +e
+    out=$("$WORKFLOW" write-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "write exit" || ok=1
+
+    grep -q "preserve-vg" "$tmp/openspec/changes/preserve-vg/proposal.md" \
+        || { printf "\n    ${RED}proposal missing change name${NC}\n"; ok=1; }
+    grep -q "developers using goal-spec" "$tmp/openspec/changes/preserve-vg/proposal.md" \
+        || { printf "\n    ${RED}proposal missing beneficiary${NC}\n"; ok=1; }
+
+    grep -q "## Execution Handoff Notes" "$tmp/openspec/changes/preserve-vg/design.md" \
+        || { printf "\n    ${RED}design missing execution handoff${NC}\n"; ok=1; }
+
+    find "$tmp/openspec/changes/preserve-vg" -name "*.dag.json" -print -quit | grep -q . \
+        && { printf "\n    ${RED}unexpected .dag.json generated${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 10: RECOVERY ACTIONS
+# =====================================================================
+
+test_recovery_action_high_stakes() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.goal-spec/changes/high-risk"
+    mkdir -p "$dir"
+    "$WORKFLOW" init high-risk --project-root "$tmp" --capability "test" --goal "Test." > /dev/null 2>&1
+    # Fill gate with pass + loop guard blockers + high stakes risks
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+gate = json.load(open('$dir/value-gate.json'))
+gate['status'] = 'pass'
+gate['changeName'] = 'high-risk'
+gate['capability'] = 'test'
+gate['valueFrame']['beneficiary'] = 'devs'
+gate['valueFrame']['problemOrOpportunity'] = 'Need test.'
+gate['valueFrame']['whyNow'] = 'Now.'
+gate['valueFrame']['successSignal'] = 'Signal.'
+gate['valueFrame']['costRiskShape'] = 'Low.'
+gate['valueFrame']['noBuildCandidate'] = 'None.'
+gate['valueFrame']['smallerScopeCandidate'] = 'None.'
+gate['valueFrame']['scopeSummary'] = 'Test.'
+gate['valueFrame']['verificationPath'] = 'Run tests.'
+gate['decision']['rationale'] = 'Testing needed.'
+gate['decision']['noBuildConsidered'] = 'Considered.'
+gate['decision']['smallerScopeConsidered'] = 'Considered.'
+gate['risks'] = ['Production API change', 'Security impact']
+json.dump(gate, open('$dir/value-gate.json', 'w'))
+state = json.load(open('$dir/workflow-state.json'))
+state['loopGuards']['repeatedQuestionHashes'] = ['same','same']
+json.dump(state, open('$dir/workflow-state.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check high-risk --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+action = d.get('recoveryAction', '')
+assert action == 'block-high-stakes', f'Expected block-high-stakes, got {action}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}high-stakes recovery action wrong${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_recovery_action_proceed_to_gate() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "ready-gate" --capability "test" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "ready-gate" "test" > "$tmp/.goal-spec/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "ready check exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+action = d.get('recoveryAction', '')
+assert action == 'proceed-to-gate', f'Expected proceed-to-gate, got {action}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}proceed-to-gate recovery action wrong${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_recovery_action_no_build() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "no-build-rec" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'blocked'
+gate['valueFrame']['successSignal'] = 'A signal.'
+gate['valueFrame']['beneficiary'] = 'devs'
+gate['valueFrame']['problemOrOpportunity'] = 'Need test.'
+gate['valueFrame']['whyNow'] = 'Now.'
+gate['valueFrame']['costRiskShape'] = 'Low.'
+gate['valueFrame']['scopeSummary'] = 'Test.'
+gate['valueFrame']['verificationPath'] = 'Run tests.'
+gate['decision']['rationale'] = 'Testing needed.'
+gate['decision']['smallerScopeConsidered'] = 'Considered.'
+gate['blockers'] = []
+gate['openQuestions'] = ['What is the right approach?']
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Blocked status with missing noBuildConsidered should recommend no-build or ask-one-question
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+action = d.get('recoveryAction', '')
+assert action in ('no-build', 'ask-one-question'), f'Expected no-build or ask-one-question, got {action}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}no-build recovery action wrong${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 11: SOURCE MANIFEST EDGE CASES
+# =====================================================================
+
+test_source_manifest_unexpected_keys() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/unexpected-keys"
+    mkdir -p "$base"
+    echo "# Proposal" > "$base/proposal.md"
+    local hash
+    hash=$(python3 -c "import hashlib; print(hashlib.sha256(open('$base/proposal.md','rb').read()).hexdigest())")
+    python3 -c "
+import json
+manifest = {
+    'schemaVersion': '1.0',
+    'changeName': 'unexpected-keys',
+    'generatedAt': '2024-01-01T00:00:00Z',
+    'sources': [{'path': 'proposal.md', 'kind': 'proposal', 'sha256': '$hash'}],
+    'unexpectedField': 'should be caught',
+}
+json.dump(manifest, open('$base/source-manifest.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest unexpected-keys --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 1 "$rc" "unexpected keys exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_source_manifest_wrong_change_name() {
+    local tmp
+    tmp=$(mktemp -d)
+    local base="$tmp/openspec/changes/wrong-name"
+    mkdir -p "$base"
+    echo "# Proposal" > "$base/proposal.md"
+    local hash
+    hash=$(python3 -c "import hashlib; print(hashlib.sha256(open('$base/proposal.md','rb').read()).hexdigest())")
+    python3 -c "
+import json
+manifest = {
+    'schemaVersion': '1.0',
+    'changeName': 'different-name',
+    'generatedAt': '2024-01-01T00:00:00Z',
+    'sources': [{'path': 'proposal.md', 'kind': 'proposal', 'sha256': '$hash'}],
+}
+json.dump(manifest, open('$base/source-manifest.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$OPENSPEC" --json validate-source-manifest wrong-name --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 1 "$rc" "wrong change name exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 12: INIT LEGACY MIGRATION EDGE CASES
+# =====================================================================
+
+test_legacy_migration_with_explicit_artifact_dir() {
+    local tmp
+    tmp=$(mktemp -d)
+    local legacy_dir="$tmp/wf-explicit/.writer-workflow/changes/explicit-dir"
+    mkdir -p "$legacy_dir"
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+gate = {
+    'schemaVersion': '1.0',
+    'status': 'pass',
+    'changeName': 'explicit-dir',
+    'capability': 'test',
+    'goal': 'Test.',
+    'createdAt': now, 'updatedAt': now,
+    'valueFrame': {
+        'beneficiary': 'devs', 'problemOrOpportunity': 'Need test.',
+        'whyNow': 'Now.', 'successSignal': 'Signal.',
+        'costRiskShape': 'Low.', 'noBuildCandidate': 'None.',
+        'smallerScopeCandidate': 'None.', 'scopeSummary': 'Test.',
+        'verificationPath': 'Run tests.',
+    },
+    'decision': {
+        'rationale': 'Testing needed.',
+        'noBuildConsidered': 'Considered.',
+        'smallerScopeConsidered': 'Considered.',
+    },
+    'constraints': [], 'nonGoals': [], 'assumptions': ['[ASSUMPTION] Stable.'],
+    'risks': [], 'openQuestions': [], 'blockers': [],
+    'acknowledgement': {
+        'requiredFor': 'proceed_with_assumptions',
+        'accepted': False, 'acceptedAt': '', 'acceptedBy': '', 'rationale': '',
+    },
+}
+json.dump(gate, open('$legacy_dir/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp/wf-explicit" --artifact-dir ".writer-workflow/changes/explicit-dir" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "explicit artifact dir check exit" || ok=1
+    [[ -d "$legacy_dir" ]] || { printf "\n    ${RED}legacy dir was migrated despite explicit artifact dir${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_legacy_migration_both_dirs_exist() {
+    local tmp
+    tmp=$(mktemp -d)
+    local legacy_dir="$tmp/.writer-workflow/changes/both-exist"
+    local goal_dir="$tmp/.goal-spec/changes/both-exist"
+    mkdir -p "$legacy_dir"
+    mkdir -p "$goal_dir"
+    filled_gate_pass "both-exist" "test" > "$goal_dir/value-gate.json"
+    filled_gate_pass "both-exist" "test" > "$legacy_dir/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check both-exist --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "both dirs check exit" || ok=1
+    # Both dirs exist and check works without crash
+    :
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 13: WORKFLOW STATE EDGE CASES
+# =====================================================================
+
+test_workflow_state_invalid_phase_status() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.goal-spec/changes/invalid-phase-status"
+    mkdir -p "$dir"
+    "$WORKFLOW" init invalid-phase-status --project-root "$tmp" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+state = json.load(open('$dir/workflow-state.json'))
+state['phases'][0]['status'] = 'impossible_status'
+json.dump(state, open('$dir/workflow-state.json', 'w'))
+"
+    filled_gate_pass "invalid-phase-status" "test" > "$dir/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check invalid-phase-status --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "invalid phase status exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+errors = d.get('errors', [])
+checks = d.get('checks', [])
+found = any('impossible_status' in e for e in errors)
+if not found:
+    found = any('impossible_status' in c.get('message','') for c in checks)
+assert found, f'Expected impossible_status in errors or checks: {errors} {checks}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}invalid phase status not detected${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_workflow_state_missing_active_phase() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.goal-spec/changes/missing-active"
+    mkdir -p "$dir"
+    "$WORKFLOW" init missing-active --project-root "$tmp" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+state = json.load(open('$dir/workflow-state.json'))
+state['activePhase'] = 'nonexistent_phase'
+json.dump(state, open('$dir/workflow-state.json', 'w'))
+"
+    filled_gate_pass "missing-active" "test" > "$dir/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check missing-active --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "missing active phase exit" || ok=1
+    echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+errors = d.get('errors', [])
+checks = d.get('checks', [])
+found = any('activePhase' in e.lower() for e in errors)
+if not found:
+    found = any('activePhase' in c.get('message','') for c in checks)
+assert found, f'Expected activePhase in errors or checks: {errors} {checks}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}missing active phase not detected${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_workflow_state_missing_loop_guards() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.goal-spec/changes/no-loops"
+    mkdir -p "$dir"
+    "$WORKFLOW" init no-loops --project-root "$tmp" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+state = json.load(open('$dir/workflow-state.json'))
+del state['loopGuards']
+json.dump(state, open('$dir/workflow-state.json', 'w'))
+"
+    filled_gate_pass "no-loops" "test" > "$dir/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check no-loops --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "missing loop guards exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 14: CLAIM GRAPH EDGE CASES
+# =====================================================================
+
+test_claim_graph_missing_claims_array() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.goal-spec/changes/bad-claims"
+    mkdir -p "$dir"
+    "$WORKFLOW" init bad-claims --project-root "$tmp" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+cg = json.load(open('$dir/claim-graph.json'))
+cg['claims'] = 'not-an-array'
+json.dump(cg, open('$dir/claim-graph.json', 'w'))
+"
+    filled_gate_pass "bad-claims" "test" > "$dir/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check bad-claims --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Claims not an array is detected as a structured blocker → blocked (20)
+    assert_exit 20 "$rc" "bad claims array exit" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_claim_graph_preserved_but_no_destinations() {
+    local tmp
+    tmp=$(mktemp -d)
+    local dir="$tmp/.goal-spec/changes/preserved-no-dest"
+    mkdir -p "$dir"
+    "$WORKFLOW" init preserved-no-dest --project-root "$tmp" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+cg = json.load(open('$dir/claim-graph.json'))
+cg['claims'] = [{
+    'id': 'claim-001',
+    'text': 'Important value claim',
+    'loadBearing': True,
+    'status': 'preserved',
+    'destinations': []
+}]
+json.dump(cg, open('$dir/claim-graph.json', 'w'))
+"
+    filled_gate_pass "preserved-no-dest" "test" > "$dir/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" gate preserved-no-dest --pre-spec --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    # Either exit 20 (structured blocker blocks gate) or exit 40 (invalid artifact from structured check)
+    if [[ "$rc" -eq 20 ]]; then
+        echo "$out" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+blockers = d.get('blockers', [])
+assert any('no OpenSpec destination' in b for b in blockers), blockers
+" > /dev/null 2>&1 \
+            || { printf "\n    ${RED}preserved-no-destination blocker not detected${NC}\n"; ok=1; }
+    elif [[ "$rc" -eq 40 ]]; then
+        :
+    else
+        printf "\n    ${RED}preserved no dest gate exit: expected 20 or 40, got %d${NC}\n" "$rc"
+        ok=1
+    fi
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# Section 15: REFLECTION REPORT EDGE CASES
+# =====================================================================
+
+test_reflection_report_ready_state() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "ready-reflect" --capability "test" --goal "Test." > /dev/null 2>&1
+    filled_gate_pass "ready-reflect" "test" > "$tmp/.goal-spec/value-gate.json"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 0 "$rc" "ready reflect exit" || ok=1
+    [[ -f "$tmp/.goal-spec/reflection-report.json" ]] || { printf "\n    ${RED}missing reflection-report.json${NC}\n"; ok=1; }
+    python3 -c "
+import json
+report = json.load(open('$tmp/.goal-spec/reflection-report.json'))
+assert report['schemaVersion'] == '1.0'
+assert 'gaps' in report
+assert 'warnings' in report
+assert len(report['gaps']) == 0
+assert 'No deterministic reflection gaps detected' in str(report.get('info', []))
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}reflection report not in ready state${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_reflection_report_detects_gaps() {
+    local tmp
+    tmp=$(mktemp -d)
+    "$WORKFLOW" init --project-root "$tmp" --change-name "gappy-reflect" --capability "test" --goal "Test." > /dev/null 2>&1
+    python3 -c "
+import json
+gate = json.load(open('$tmp/.goal-spec/value-gate.json'))
+gate['status'] = 'pass'
+json.dump(gate, open('$tmp/.goal-spec/value-gate.json', 'w'))
+"
+    local out rc
+    set +e
+    out=$("$WORKFLOW" check --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    local ok=0
+    assert_exit 40 "$rc" "gappy reflect exit" || ok=1
+    python3 -c "
+import json
+report = json.load(open('$tmp/.goal-spec/reflection-report.json'))
+assert report['schemaVersion'] == '1.0'
+gaps = report.get('gaps', [])
+assert len(gaps) > 0, f'Expected gaps, got {gaps}'
+" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}reflection report did not detect gaps${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+# =====================================================================
+# main
+# =====================================================================
+
+echo ""
+echo "=============================================="
+echo " goal-spec COMPREHENSIVE test suite"
+echo "=============================================="
+echo ""
+
+echo "--- canonical artifact validators ---"
+run_test "invalid schemaVersion"                   test_value_gate_invalid_schema_version
+run_test "missing schemaVersion"                   test_value_gate_missing_schema_version
+run_test "invalid status value"                    test_value_gate_invalid_status
+run_test "missing status field"                    test_value_gate_missing_status
+run_test "malformed JSON"                          test_value_gate_malformed_json
+run_test "non-object root"                         test_value_gate_non_object_root
+run_test "source manifest schema validation"       test_source_manifest_schema_validation
+echo ""
+
+echo "--- logic closure paths ---"
+run_test "placeholder detection: HTML tags"         test_placeholder_detection_html_tags
+run_test "placeholder detection: TBD variants"      test_placeholder_detection_tbd_variants
+run_test "placeholder detection: mixed brackets"    test_placeholder_detection_mixed_brackets
+run_test "placeholder detection: legit values"      test_placeholder_detection_legit_values
+run_test "validate name edge cases"                 test_validate_name_edge_cases
+run_test "blocked with empty blockers warning"      test_check_blocked_empty_blockers_warning
+run_test "pass with open questions warning"         test_pass_with_open_questions_warning
+run_test "proceed with empty assumptions"           test_proceed_with_assumptions_empty_assumptions
+echo ""
+
+echo "--- approval decisions ---"
+run_test "acknowledgement: missing fields"          test_acknowledgement_valid_missing_fields
+run_test "acknowledgement: complete valid"          test_acknowledgement_valid_complete
+run_test "acknowledgement: missing object"          test_acknowledgement_missing_object
+echo ""
+
+echo "--- deterministic command audit ---"
+run_test "check output deterministic"               test_deterministic_check_output
+run_test "gate output deterministic"                test_deterministic_gate_output
+run_test "write-spec output deterministic"          test_deterministic_write_spec_output
+run_test "all commands emit valid JSON"             test_all_commands_emit_valid_json
+echo ""
+
+echo "--- digest canonicalization ---"
+run_test "sha256 determinism"                       test_sha256_determinism
+run_test "manifest digest matches content"          test_manifest_digest_matches_content
+run_test "manifest detects stale digests"           test_manifest_detects_stale_digests
+run_test "manifest detects missing source files"    test_manifest_detects_missing_source_files
+echo ""
+
+echo "--- package validation ---"
+run_test "propose scaffolds files"                  test_openspec_propose_scaffolds_files
+run_test "propose rejects bad name"                 test_openspec_propose_rejects_bad_name
+run_test "build-source-manifest refreshes digests"  test_openspec_build_manifest_refreshes_digests
+run_test "archive-preflight basic"                  test_openspec_archive_preflight_basic
+run_test "archive-preflight unchecked tasks"        test_openspec_archive_preflight_unchecked_tasks
+run_test "check-change-explainer compat"            test_check_change_explainer_compat
+echo ""
+
+echo "--- role-run audit ---"
+run_test "profile validates against schema"         test_authoring_profile_validates_against_schema
+run_test "profile no DAG/runtime leakage"           test_authoring_profile_no_dag_runtime_leakage
+run_test "authoring docs consistency"               test_authoring_profile_docs_consistency
+echo ""
+
+echo "--- boundary validators ---"
+run_test "empty value gate"                         test_boundary_empty_value_gate
+run_test "missing valueFrame"                       test_boundary_missing_value_frame
+run_test "missing decision"                         test_boundary_missing_decision
+run_test "change name edge cases"                   test_boundary_change_name_edge_cases
+run_test "phase invalid status"                     test_boundary_phase_invalid_status
+run_test "phase unknown phase id"                   test_boundary_phase_unknown_phase_id
+echo ""
+
+echo "--- write-spec gating (extended) ---"
+run_test "force overwrite existing spec"            test_write_spec_force_overwrite
+run_test "preserves value gate data in output"      test_write_spec_preserves_value_gate_data
+echo ""
+
+echo "--- recovery actions ---"
+run_test "high stakes recommends block-high-stakes" test_recovery_action_high_stakes
+run_test "pass recommends proceed-to-gate"          test_recovery_action_proceed_to_gate
+run_test "missing noBuild recommends no-build"      test_recovery_action_no_build
+echo ""
+
+echo "--- source manifest edge cases ---"
+run_test "unexpected keys detected"                 test_source_manifest_unexpected_keys
+run_test "wrong change name detected"               test_source_manifest_wrong_change_name
+echo ""
+
+echo "--- legacy migration edge cases ---"
+run_test "explicit artifact dir skips migration"    test_legacy_migration_with_explicit_artifact_dir
+run_test "both dirs exist works"                    test_legacy_migration_both_dirs_exist
+echo ""
+
+echo "--- workflow state edge cases ---"
+run_test "invalid phase status"                     test_workflow_state_invalid_phase_status
+run_test "missing active phase"                     test_workflow_state_missing_active_phase
+run_test "missing loop guards"                      test_workflow_state_missing_loop_guards
+echo ""
+
+echo "--- claim graph edge cases ---"
+run_test "claims not an array"                      test_claim_graph_missing_claims_array
+run_test "preserved claim no destinations"          test_claim_graph_preserved_but_no_destinations
+echo ""
+
+echo "--- reflection report edge cases ---"
+run_test "ready state (no gaps)"                    test_reflection_report_ready_state
+run_test "detects gaps in incomplete gate"          test_reflection_report_detects_gaps
+echo ""
+
+# --- summary ---
+echo "=============================================="
+printf " Results: ${GREEN}%d passed${NC}" "$PASS"
+if [[ "$FAIL" -gt 0 ]]; then
+    printf ", ${RED}%d failed${NC}" "$FAIL"
+fi
+if [[ "$SKIP" -gt 0 ]]; then
+    printf ", ${YELLOW}%d skipped${NC}" "$SKIP"
+fi
+printf " (total %d)\n" "$TOTAL"
+echo "=============================================="
+
+if [[ "$FAIL" -gt 0 ]]; then
+    exit 1
+fi
+exit 0

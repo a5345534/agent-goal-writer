@@ -16,7 +16,8 @@
     "agent-skills"
   ],
   "scripts": {
-    "test": "scripts/test-workflow"
+    "check": "scripts/test-workflow && scripts/test-comprehensive",
+    "test": "scripts/test-workflow && scripts/test-comprehensive"
   },
   "files": [
     "SKILL.md",
