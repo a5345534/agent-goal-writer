@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/clarification-response.schema.json",
+  "title": "Clarification Response",
+  "description": "Decision maker answers to logic gap brief.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "answers", "readyForReassessment"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "sourceBrief": { "type": "string" },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "answeredBy": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["human", "role", "orchestrator", "policy"] },
+        "id": { "type": "string" },
+        "displayName": { "type": "string" },
+        "source": { "type": "string" },
+        "sourceRef": { "type": "string" }
+      }
+    },
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["questionId", "answer", "resolvedField"],
+        "additionalProperties": false,
+        "properties": {
+          "questionId": { "type": "string" },
+          "answer": { "type": "string" },
+          "resolvedField": { "type": "string" }
+        }
+      },
+      "minItems": 1
+    },
+    "readyForReassessment": { "type": "boolean" }
+  }
+}

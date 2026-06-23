@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/project-model.schema.json",
+  "title": "Project Model",
+  "description": "Baseline project understanding produced by collector/evidence-collector role. Must not contain value judgment, approval decision, or OpenSpec draft content.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "role", "modelClass", "projectPurpose", "stageBoundary", "sourceRefs"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "role": { "const": "collector" },
+    "modelClass": { "const": "evidence-collector" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "projectPurpose": { "type": "string", "minLength": 1 },
+    "stageBoundary": {
+      "type": "object",
+      "required": ["ownedStage", "mustNotDo"],
+      "additionalProperties": false,
+      "properties": {
+        "ownedStage": { "type": "string" },
+        "mustNotDo": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "coreComponents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "purpose"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "purpose": { "type": "string" }
+        }
+      }
+    },
+    "existingCapabilities": { "type": "array", "items": { "type": "string" } },
+    "knownBoundaries": { "type": "array", "items": { "type": "string" } },
+    "sourceRefs": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+  },
+  "not": {
+    "required": ["recommendedPath", "valueDecision", "approvalDecision", "openSpecDraft"]
+  }
+}

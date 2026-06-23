@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/value-logic-closure-assessment.schema.json",
+  "title": "Value & Logic Closure Assessment",
+  "description": "Per-field closure assessment by judge. Blocking closure problems route to logic_gap_completion.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "role", "modelClass", "logicClosure", "valueAssessment"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "role": { "const": "judge" },
+    "modelClass": { "const": "value-judge" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "logicClosure": {
+      "type": "object",
+      "required": ["projectModeled", "projectMeaningClear", "duplicateHandled", "conflictHandled", "enhancementClear", "logicGapsKnown", "boundaryFit"],
+      "additionalProperties": true,
+      "properties": {
+        "projectModeled": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "projectMeaningClear": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "duplicateHandled": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "conflictHandled": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "enhancementClear": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "logicGapsKnown": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "successSignalDefined": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "boundaryFit": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "noBuildConsidered": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "smallerScopeConsidered": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] },
+        "approvalOptionsClear": { "enum": ["satisfied", "weak", "missing", "conflicting", "unsafe_to_assume", "not_applicable"] }
+      }
+    },
+    "valueAssessment": {
+      "type": "object",
+      "required": ["hasSpecAuthoringValue", "valueLevel", "reason", "costRiskShape"],
+      "additionalProperties": false,
+      "properties": {
+        "hasSpecAuthoringValue": { "type": "boolean" },
+        "valueLevel": { "type": "string" },
+        "reason": { "type": "string" },
+        "costRiskShape": { "type": "string" }
+      }
+    },
+    "closureProblems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "problem", "blocking"],
+        "additionalProperties": false,
+        "properties": {
+          "field": { "type": "string" },
+          "problem": { "type": "string" },
+          "blocking": { "type": "boolean" }
+        }
+      }
+    },
+    "recommendedNext": { "enum": ["logic_gap_completion", "change_value_assessment_report"] }
+  }
+}

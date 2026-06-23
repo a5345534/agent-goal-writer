@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "1.0",
+  "workflow": "spec_ideation_authoring_flow",
+  "steps": [
+    {
+      "id": "proposal_intake",
+      "kind": "deterministic",
+      "requiredInputs": ["rawProposal"],
+      "expectedOutputs": ["proposal-intake.json"],
+      "validator": "validate-proposal-intake",
+      "next": "project_modeling"
+    },
+    {
+      "id": "project_modeling",
+      "kind": "role",
+      "role": "collector",
+      "modelClass": "evidence-collector",
+      "requiredInputs": ["proposal-intake.json"],
+      "expectedOutputs": ["project-model.json"],
+      "validator": "validate-project-model",
+      "next": "proposal_meaning_analysis"
+    },
+    {
+      "id": "proposal_meaning_analysis",
+      "kind": "role",
+      "role": "judge",
+      "modelClass": "value-judge",
+      "requiredInputs": ["proposal-intake.json", "project-model.json"],
+      "expectedOutputs": ["proposal-meaning-analysis.json"],
+      "validator": "validate-proposal-meaning-analysis",
+      "next": "value_logic_closure_assessment"
+    },
+    {
+      "id": "value_logic_closure_assessment",
+      "kind": "role",
+      "role": "judge",
+      "modelClass": "value-judge",
+      "requiredInputs": ["project-model.json", "proposal-meaning-analysis.json"],
+      "expectedOutputs": ["value-logic-closure-assessment.json"],
+      "validator": "validate-value-logic-closure-assessment",
+      "next": "logic_closure_gate"
+    },
+    {
+      "id": "logic_closure_gate",
+      "kind": "gate",
+      "requiredInputs": ["value-logic-closure-assessment.json"],
+      "expectedOutputs": ["logic-closure-gate.json"],
+      "validator": "logic-closure-gate",
+      "branches": {
+        "closed": "change_value_assessment_report",
+        "not_closed": "logic_gap_completion"
+      }
+    },
+    {
+      "id": "logic_gap_completion",
+      "kind": "role",
+      "role": "judge",
+      "modelClass": "value-judge",
+      "requiredInputs": ["logic-closure-gate.json"],
+      "expectedOutputs": ["logic-gap-brief.json"],
+      "validator": "validate-logic-gap-brief",
+      "next": "clarification_response"
+    },
+    {
+      "id": "clarification_response",
+      "kind": "deterministic",
+      "requiredInputs": ["logic-gap-brief.json"],
+      "expectedOutputs": ["clarification-response.json"],
+      "validator": "validate-clarification-response",
+      "next": "value_logic_closure_assessment"
+    },
+    {
+      "id": "change_value_assessment_report",
+      "kind": "role",
+      "role": "judge",
+      "modelClass": "value-judge",
+      "requiredInputs": ["logic-closure-gate.json", "value-logic-closure-assessment.json"],
+      "expectedOutputs": ["change-value-assessment-report.json"],
+      "validator": "validate-change-value-report",
+      "next": "openspec_authoring_approval_gate"
+    },
+    {
+      "id": "openspec_authoring_approval_gate",
+      "kind": "gate",
+      "requiredInputs": ["change-value-assessment-report.json"],
+      "expectedOutputs": ["openspec-authoring-approval-gate.json"],
+      "validator": "approval-gate",
+      "branches": {
+        "approve_openspec_authoring": "spec_kernel",
+        "approve_smaller_scope_openspec_authoring": "spec_kernel",
+        "continue_discussion": "value_logic_closure_assessment",
+        "accept_no_build_recommendation": "terminal",
+        "abandon_proposal": "terminal"
+      }
+    },
+    {
+      "id": "spec_kernel",
+      "kind": "role",
+      "role": "writer",
+      "modelClass": "spec-writer",
+      "requiredInputs": ["openspec-authoring-approval-gate.json"],
+      "expectedOutputs": ["spec-kernel.json"],
+      "validator": "validate-spec-kernel",
+      "next": "pre_spec_gate"
+    },
+    {
+      "id": "pre_spec_gate",
+      "kind": "gate",
+      "requiredInputs": ["spec-kernel.json", "openspec-authoring-approval-gate.json"],
+      "expectedOutputs": ["pre-spec-gate.json"],
+      "validator": "pre-spec-gate",
+      "next": "openspec_writing"
+    },
+    {
+      "id": "openspec_writing",
+      "kind": "role",
+      "role": "writer",
+      "modelClass": "spec-writer",
+      "requiredInputs": ["spec-kernel.json", "pre-spec-gate.json"],
+      "expectedOutputs": ["write-spec-status.json"],
+      "validator": "write-spec",
+      "next": "explainer"
+    },
+    {
+      "id": "explainer",
+      "kind": "role",
+      "role": "explainer",
+      "modelClass": "explainer-writer",
+      "requiredInputs": ["write-spec-status.json"],
+      "expectedOutputs": ["change-explainer.html"],
+      "validator": "validate-explainer",
+      "next": "package_review"
+    },
+    {
+      "id": "package_review",
+      "kind": "role",
+      "role": "reviewer",
+      "modelClass": "strict-reviewer",
+      "requiredInputs": ["write-spec-status.json"],
+      "expectedOutputs": ["package-review.json"],
+      "validator": "validate-package-review",
+      "next": "handoff_ready"
+    },
+    {
+      "id": "handoff_ready",
+      "kind": "gate",
+      "requiredInputs": ["package-review.json"],
+      "expectedOutputs": ["handoff-ready.json"],
+      "validator": "handoff-ready-gate",
+      "next": "terminal"
+    }
+  ]
+}

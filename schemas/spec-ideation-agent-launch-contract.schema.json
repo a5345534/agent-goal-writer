@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Spec Ideation Agent Launch Contract",
+  "description": "Describes how an external harness should launch role-specific agents.",
+  "type": "object",
+  "required": ["schemaVersion", "workflow", "roles"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "workflow": { "const": "spec_ideation_authoring_flow" },
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["modelClass"],
+        "additionalProperties": false,
+        "properties": {
+          "modelClass": { "type": "string" },
+          "promptTemplate": { "type": "string" },
+          "promptTemplates": { "type": "array", "items": { "type": "string" } },
+          "requiredInputs": { "type": "array", "items": { "type": "string" } },
+          "expectedOutputs": { "type": "array", "items": { "type": "string" } },
+          "validator": { "type": "string" },
+          "requiredGate": { "type": "string" },
+          "forbiddenActions": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

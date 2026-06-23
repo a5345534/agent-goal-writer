@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/proposal-meaning-analysis.schema.json",
+  "title": "Proposal Meaning Analysis",
+  "description": "Proposal classified against project model by judge. Must include duplicate, conflict, enhancement, gap, and boundary-fit sections.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "role", "modelClass", "proposalSummary", "meaningToProject", "logicDuplicatePoints", "logicConflictPoints", "logicEnhancementPoints", "logicGapPoints", "boundaryFit"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "role": { "const": "judge" },
+    "modelClass": { "const": "value-judge" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "proposalSummary": { "type": "string", "minLength": 1 },
+    "meaningToProject": {
+      "type": "object",
+      "required": ["classification", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "classification": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "logicDuplicatePoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["existingLogic", "risk"],
+        "additionalProperties": false,
+        "properties": {
+          "existingLogic": { "type": "string" },
+          "risk": { "type": "string" }
+        }
+      }
+    },
+    "logicConflictPoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["conflict", "severity", "resolutionDirection"],
+        "additionalProperties": false,
+        "properties": {
+          "conflict": { "type": "string" },
+          "severity": { "type": "string" },
+          "resolutionDirection": { "type": "string" }
+        }
+      }
+    },
+    "logicEnhancementPoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["enhancement", "value"],
+        "additionalProperties": false,
+        "properties": {
+          "enhancement": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      }
+    },
+    "logicGapPoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gap", "impact"],
+        "additionalProperties": false,
+        "properties": {
+          "gap": { "type": "string" },
+          "impact": { "type": "string" }
+        }
+      }
+    },
+    "boundaryFit": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "candidatePaths": { "type": "array", "items": { "type": "string" } }
+  }
+}

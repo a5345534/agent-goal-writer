@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Spec Ideation Authoring Workflow",
+  "description": "Machine-readable workflow contract for orchestrators.",
+  "type": "object",
+  "required": ["schemaVersion", "workflow", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "workflow": { "const": "spec_ideation_authoring_flow" },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "requiredInputs", "expectedOutputs"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "enum": ["deterministic", "role", "gate"] },
+          "role": { "type": "string" },
+          "modelClass": { "type": "string" },
+          "requiredInputs": { "type": "array", "items": { "type": "string" } },
+          "expectedOutputs": { "type": "array", "items": { "type": "string" } },
+          "validator": { "type": "string" },
+          "next": { "type": "string" },
+          "branches": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "blockedTransitions": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "minItems": 1
+    }
+  }
+}

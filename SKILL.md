@@ -302,190 +302,176 @@ Use the same skill for these OpenSpec planning/writing modes:
 - Do not place module-specific domain entities or responsibilities into shared
   modules unless the current authoritative specs allow it.
 
-## Workflow
+## Workflow — Spec Ideation Authoring Flow
 
-### 1. Bootstrap project understanding
+The goal-spec workflow follows canonical stages 0–11. Each stage produces a
+machine-checkable artifact under `.goal-spec/changes/<change-name>/`.
+Deterministic scripts validate and transition; semantic artifacts are
+produced by role agents (collector, judge, writer, explainer, reviewer).
 
-Before writing specs, identify:
+### 0. Proposal Intake
 
-- whether the target is a single repo or multi-repo workspace;
-- which repo/module owns the behavior;
-- existing specs that already cover the capability;
-- boundaries, non-goals, and upstream/downstream interactions;
-- validation commands expected by the project.
+Capture the raw proposal as `proposal-intake.json`. Preserve the original
+proposal text. Do not add value judgment or OpenSpec source content.
 
-Use semantic/context search first when available. Then read only relevant
-source-of-truth docs and existing specs.
+### 1. Project Modeling Step
 
-### 2. Detect intent mode
+The **collector** (`evidence-collector`) builds a baseline project model
+from source evidence. Output: `project-model.json`.
 
-Classify the user's request:
+Must include: project purpose, stage boundary, core components, existing
+capabilities, known boundaries, and source references. Must not contain
+value judgment, recommended path, approval decision, or OpenSpec draft.
 
-- **Create**: no existing OpenSpec change; write a new package.
-- **Update**: existing change/spec receives a change signal; reconcile without
-  silently overriding earlier decisions.
-- **Validate**: critique the package without changing it unless asked.
+### 2. Proposal Meaning Analysis Step
 
-If unclear, ask one short clarifying question.
+The **judge** (`value-judge`) analyzes the proposal against the project model.
+Output: `proposal-meaning-analysis.json`.
 
-### 3. Discovery before drafting
+Must include: proposal summary, meaning-to-project classification, duplicate
+points, conflict points, enhancement points, gap points, boundary fit, and
+candidate paths. Must cite `project-model.json`.
 
-Run lightweight discovery unless the user explicitly requests a fast draft.
-Get to a usable mode quickly; do not interrogate the user with a long form. A
-fast draft may compress discovery, but it does not skip the Value Challenge Gate
-unless the user explicitly selects `proceed_with_assumptions`.
+### 3. Value & Logic Closure Assessment Step
 
-#### 3.1 Brain dump
+The **judge** (`value-judge`) assesses whether the proposal is logically
+closed. Output: `value-logic-closure-assessment.json`.
 
-Ask the user for:
+Must include: per-field closure assessment (project modeled, meaning clear,
+duplicates handled, conflicts handled, enhancements clear, gaps known, success
+signal defined, boundary fit, no-build considered, smaller scope considered,
+approval options clear), value assessment, closure problems, and recommended
+next step.
 
-- the raw goal in their own words;
-- any existing inputs to read (tickets, docs, PRD, incident notes, design notes,
-  code references, screenshots, API docs);
-- what they almost forgot to mention.
+If blocking closure problems exist, `recommendedNext` must be
+`logic_gap_completion`.
 
-If the user already pasted a lot of context, treat it as intake, then still ask
-whether there is any missing context.
+### 4. Logic Closure Gate
 
-#### 3.2 Stakes calibration
+A **deterministic script** evaluates the closure assessment.
+Output: `logic-closure-gate.json`.
 
-Ask or infer the stakes:
+- **not_closed** → routes to Logic Gap Completion (4-1)
+- **closed** → routes to Change Value Assessment Report (4-2)
 
-- quick internal fix;
-- internal workflow/tooling;
-- user-visible product behavior;
-- public API/event/data contract;
-- regulated/security/production-sensitive change;
-- architecture/module-boundary decision.
+### 4-1. Logic Gap Completion Step
 
-Higher stakes require deeper design, risk, verification, and review sections.
+The **judge** produces a concise gap brief when logic is not closed.
+Output: `logic-gap-brief.json`.
 
-#### 3.3 Working mode
+Every question must map to a blocking field and provide options or concrete
+answer direction. No broad "please provide more detail" questions.
 
-Offer two modes when the request is non-trivial:
+After the decision maker responds (`clarification-response.json`), the
+workflow loops back to stage 3 for reassessment.
 
-- **Fast path**: batch gaps into one or two consolidated questions, then draft
-  with `[ASSUMPTION]` tags where inference was necessary.
-- **Coaching path**: walk the key sections together; use this for ambiguous,
-  high-stakes, or user-visible product decisions.
+### 4-2. Change Value Assessment Report Step
 
-If the user says to proceed, default to Fast path but preserve assumptions.
+The **judge** produces the final value assessment when logic is closed.
+Output: `change-value-assessment-report.json`.
 
-#### 3.4 Concern scan
+Must include: verdict, summary, project meaning, recommended path, and
+alternatives. Must not be named or framed as an implementation value report.
+This report prepares the OpenSpec Authoring Approval Gate.
 
-Name the concerns present in the change. Examples:
+### 5. OpenSpec Authoring Approval Gate
 
-- module ownership / boundary risk;
-- API or event compatibility;
-- data migration;
-- security/privacy;
-- compliance/regulatory traceability;
-- frontend UX/routing;
-- observability/operability;
-- performance/SLA;
-- rollback/deployment order;
-- multi-agent or parallel implementation conflicts.
+A **deterministic command** records an explicit approval decision from an
+authorized approver. Output: `openspec-authoring-approval-gate.json`.
 
-Use these concerns to decide which proposal/design/spec sections need depth.
+Allowed decisions:
 
-### 4. Frame value and alternatives
+| Decision | Effect |
+|----------|--------|
+| `continue_discussion` | Loop back to assessment or gap completion |
+| `abandon_proposal` | Terminal — no OpenSpec package |
+| `accept_no_build_recommendation` | Terminal — no package, preserve rationale |
+| `approve_smaller_scope_openspec_authoring` | Writer proceeds within approvedScope |
+| `approve_openspec_authoring` | Writer proceeds with full scope |
 
-Before writing OpenSpec files, translate the request into a value frame:
+The gate must reference the current change value report digest. The gate
+must not use `execute_implementation` or any implementation-implying language.
+Approver types: `human`, `role`, `orchestrator`, `policy`.
 
-```text
-User/beneficiary: <who benefits or is protected>
-Problem or opportunity: <current pain, risk, inefficiency, mandate, or upside>
-Why now: <trigger, urgency, or reason not to defer>
-Success signal: <observable improvement or prevented failure>
-Cost/risk shape: <implementation, governance, operational, migration, or review cost>
-No-build candidate: <existing behavior/process/docs/config/manual path, or none>
-Smaller-scope candidate: <minimal useful slice, or none>
-Assumptions: <what is inferred rather than known>
-```
+### 6. Spec Kernel Step
 
-Value-frame rules:
+The **writer** (`spec-writer`) distills the approved proposal into the spec
+kernel. Output: `spec-kernel.json`.
 
-- If no beneficiary or success signal can be named, challenge before scaffolding.
-- If the request names only an implementation mechanism, ask what user/system
-  outcome the mechanism is meant to produce.
-- If a no-build or smaller-scope option plausibly achieves the success signal,
-  present it instead of defaulting to a full package.
-- If value depends on missing evidence, either ask for it or use
-  `proceed_with_assumptions` with explicit risk.
+Preserves: Why, Capabilities, Constraints, Non-goals, Success signal,
+assumptions, and open questions.
 
-### 5. Value Challenge Gate
+### 7. Pre-Spec Gate
 
-Do not scaffold an OpenSpec change until this gate has one of the outcomes
-below. This is the prompt-level checkpoint that prevents the skill from acting as
-an order-taker.
+A **deterministic script** validates freshness and boundary compliance
+before writing. Output: `pre-spec-gate.json`.
 
-Gate questions:
+Checks: all upstream artifacts have matching digests, no runtime leakage,
+no concrete model IDs.
 
-- Is the desired outcome clear enough to review?
-- Is the user/system benefit or risk reduction credible?
-- Is there an observable success signal?
-- Is a governed build/spec change more appropriate than no-build, measurement,
-  documentation, configuration, or process change?
-- Is the requested scope the smallest useful scope?
-- Are material risks, boundaries, and validation needs knowable enough to draft?
+### 8. OpenSpec Writing Step
 
-Gate outcomes:
+The **writer** (`spec-writer`) authors the OpenSpec change package.
+Output: `write-spec-status.json`.
 
-- **Proceed to spec**: value, scope, and success are clear enough; continue to
-  Spec Kernel and scaffolding.
-- **No-build**: do not scaffold; report the no-build recommendation and the
-  evidence/trigger that would reopen the decision.
-- **Smaller-scope**: narrow the change before naming/scaffolding; preserve
-  deferred work as non-goals or `[BACKLOG]` only when useful.
-- **Ask before drafting**: ask one concise blocking question when a human
-  decision is required for value, safety, or scope.
-- **`proceed_with_assumptions`**: continue only with explicit assumptions,
-  open questions, and review/verification steps that can retire uncertainty.
+`write-spec` requires all prerequisites: closed logic gate, fresh change
+value report, approval gate with `approve_openspec_authoring` or
+`approve_smaller_scope_openspec_authoring`, approval referencing current
+report digest, valid spec-kernel, passing pre-spec gate, no runtime
+leakage, no concrete model IDs.
 
-Challenge triggers:
+### 9. Explainer Step
 
-- no clear beneficiary, failure mode, or success signal;
-- request appears to optimize internal preference without user/system value;
-- existing behavior, configuration, docs, process, or manual operation likely
-  solves the need;
-- scope combines unrelated capabilities or speculative future work;
-- proposed implementation conflicts with authoritative specs or module
-  boundaries;
-- high-stakes API, data, security, compliance, production, or architecture
-  decisions are ambiguous;
-- estimated governance/implementation cost appears larger than the validated
-  value.
+The **explainer** (`explainer-writer`) generates the decision-review
+`change-explainer.html` from OpenSpec sources.
 
-When a trigger is present, use the constructive disagreement protocol. If the
-user chooses to continue despite the challenge, capture the rationale and risks
-in `proposal.md` and/or `design.md`.
+### 10. Package Review Step
 
-### 6. Pre-spec quality rubric
+The **reviewer** (`strict-reviewer`) reviews the complete OpenSpec package.
+Output: `package-review.json`.
 
-Run this rubric before selecting names or scaffolding. It is intentionally
-lighter than the final quality rubric, but failure should change the path to
-no-build, smaller-scope, a clarifying question, or `proceed_with_assumptions`.
+The reviewer must not silently rewrite sources unless explicitly invoked in
+fix mode.
 
-| Criterion | Pass signal | If weak |
-| --- | --- | --- |
-| Value clarity | beneficiary, problem, and why-now are stated | challenge or ask for context |
-| Success signal | outcome can be tested, demoed, inspected, or measured | define signal or tag assumption |
-| Evidence/source grounding | claims come from user input, source docs, code, incidents, or explicit assumptions | ask/read more or mark `[ASSUMPTION]` |
-| Scope discipline | smallest useful capability is identified; non-goals are visible | propose smaller-scope |
-| No-build considered | lower-cost non-build options were checked | recommend no-build or explain why not |
-| Boundary/risk awareness | ownership, API/data/security/ops risks are known enough for stakes | ask, reduce scope, or record open question |
-| Spec readiness | requirements can be stated as WHAT, not merely HOW | reframe outcome before drafting |
-| Verification path | there is at least one plausible validation route | add validation assumption or pause |
+### 11. Handoff Ready Gate
 
-Minimum pre-spec bar:
+A **deterministic script** performs final validation. Output: `handoff-ready.json`.
 
-- For low-stakes internal changes, unresolved items may proceed only as tagged
-  assumptions.
-- For high-stakes or irreversible changes, unresolved value/safety/boundary
-  questions block scaffolding unless the user explicitly accepts
-  `proceed_with_assumptions`.
-- Do not create a full OpenSpec package just to legitimize an idea that the gate
-  says should be no-build.
+The change is ready for downstream Stage 2 planning via `goal-dag`.
+
+### Artifact freshness
+
+Every downstream artifact records SHA-256 digests of its load-bearing inputs
+in `inputDigests`. JSON artifacts use canonical JSON hashing (sorted keys,
+UTF-8, trailing newline ignored). Markdown files hash exact UTF-8 content.
+Gates fail closed on stale digests.
+
+### Role-run audit
+
+Every semantic artifact is traceable to a role-run record
+(`.goal-spec/changes/<change-name>/role-runs/<role>/<run-id>.json`) or a
+deterministic command record. Role-run records include boundary assertions.
+
+### Boundary validators
+
+Stage 1 artifacts must not contain runtime-owned outputs (DAG sidecars,
+trace sidecars, GoalDagSpec, goal invocation, workspace strategy, worktree
+allocation, controller/subagent scenarios, completion gates, runtime node
+definitions, subagent scheduling, runtime validation policy, runtime model
+binding, concrete model selection). These terms are allowed only when
+explicitly framed as prohibited "must not" text.
+
+No concrete provider/model IDs. Hard-block known concrete prefixes.
+Contextual-block provider/model patterns only near model/provider/binding
+keys. Allowed Stage 1 references: `modelClass`, `evidence-collector`,
+`value-judge`, `spec-writer`, `explainer-writer`, `strict-reviewer`.
+
+### Compatibility
+
+The existing `proceed_with_assumptions` path is preserved as an escape hatch
+alongside the new formal gates. Existing helper artifacts (`value-gate.json`,
+`claim-graph.json`) may remain as compatibility projections generated from
+canonical artifacts, but are never the primary value-decision source.
 
 ### 7. Build the Spec Kernel
 

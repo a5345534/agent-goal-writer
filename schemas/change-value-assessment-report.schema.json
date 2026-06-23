@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/change-value-assessment-report.schema.json",
+  "title": "Change Value Assessment Report",
+  "description": "Value verdict with alternatives, produced when logic is closed. Must not be named or framed as an implementation value report.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "role", "modelClass", "verdict", "summary", "recommendedPath"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "role": { "const": "judge" },
+    "modelClass": { "const": "value-judge" },
+    "sourceGate": { "type": "string" },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "verdict": { "enum": ["valuable_for_openspec_authoring", "not_valuable_for_openspec_authoring"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "projectMeaning": { "type": "string" },
+    "logicClosureSummary": { "type": "object" },
+    "recommendedPath": { "enum": ["continue_discussion", "abandon_proposal", "accept_no_build_recommendation", "approve_smaller_scope_openspec_authoring", "approve_openspec_authoring"] },
+    "alternatives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "assessment"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "assessment": { "type": "string" }
+        }
+      }
+    },
+    "boundaryDecision": { "type": "string" }
+  }
+}

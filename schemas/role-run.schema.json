@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/role-run.schema.json",
+  "title": "Role Run Record",
+  "description": "Auditable record of one role execution with boundary assertions.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "runId", "role", "modelClass", "step", "status", "boundaryAssertions"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "role": { "enum": ["collector", "judge", "writer", "explainer", "reviewer"] },
+    "modelClass": { "enum": ["evidence-collector", "value-judge", "spec-writer", "explainer-writer", "strict-reviewer"] },
+    "step": { "type": "string" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "outputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "outputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "startedAt": { "type": "string" },
+    "completedAt": { "type": "string" },
+    "status": { "enum": ["complete", "blocked", "failed"] },
+    "boundaryAssertions": {
+      "type": "object",
+      "required": ["noValueDecision", "noOpenSpecWriting", "noRuntimePlanning", "noConcreteModelId"],
+      "additionalProperties": false,
+      "properties": {
+        "noValueDecision": { "type": "boolean" },
+        "noOpenSpecWriting": { "type": "boolean" },
+        "noRuntimePlanning": { "type": "boolean" },
+        "noConcreteModelId": { "type": "boolean" }
+      }
+    }
+  }
+}
