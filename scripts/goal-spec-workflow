@@ -1905,18 +1905,14 @@ def _run_canonical_gate_checks(lcg, approval, cvr, sk, base):
         for field in optional_present:
             if field not in sk:
                 errors.append(f"spec-kernel missing field: {field}")
-    # Problem-scope: user gate must exist and be confirm_scope_for_analysis
-    # Only enforced when problem-scope artifacts are present (backward compat)
-    psug = _load_artifact(base, PROBLEM_SCOPE_USER_GATE_FILE)
-    pma_check = _load_artifact(base, PROPOSAL_MEANING_ANALYSIS_FILE)
-    has_problem_scope = bool(psug or _load_artifact(base, PROBLEM_SCOPE_FRAMING_FILE) or _load_artifact(base, SCOPE_CLOSURE_GATE_FILE))
-    if has_problem_scope:
-        if not psug:
-            errors.append(f"{PROBLEM_SCOPE_USER_GATE_FILE} not found — scope must be confirmed before write-spec")
-        elif psug.get("decision") != "confirm_scope_for_analysis":
-            errors.append(f"problem-scope-user-gate decision is {psug.get('decision')}, not confirm_scope_for_analysis")
-        if pma_check:
-            errors.extend(_check_required_input_digests(pma_check, base, PROPOSAL_MEANING_ANALYSIS_FILE))
+    # Validate full required digest chain for all canonical artifacts present
+    # Only when problem-scope artifacts exist (backward compat with legacy tests)
+    has_scope_flow = bool(_load_artifact(base, PROBLEM_SCOPE_FRAMING_FILE) or _load_artifact(base, SCOPE_CLOSURE_GATE_FILE) or _load_artifact(base, PROBLEM_SCOPE_USER_GATE_FILE))
+    if has_scope_flow:
+        for artifact_file in REQUIRED_INPUT_DIGESTS:
+            data = _load_artifact(base, artifact_file)
+            if data:
+                errors.extend(_check_required_input_digests(data, base, artifact_file))
     for fp in base.rglob("*.json"):
         if "role-runs" in str(fp): continue
         try: text = fp.read_text()

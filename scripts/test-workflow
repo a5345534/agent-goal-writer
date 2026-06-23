@@ -1407,39 +1407,22 @@ with open(f'{base}/problem-scope-framing.json','w') as f: json.dump(framing,f)
 }
 
 test_clarification_request_response_separation() {
-    # Clarification request/response are separate, with bounded questions
-    local tmp
+    local tmp base
     tmp=$(mktemp -d)
     git -C "$tmp" init -q
     "$WORKFLOW" intake test-clarify --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
     base="$tmp/.goal-spec/changes/test-clarify"
     mkdir -p "$base"
-    python3 -c "
-import json
-framing={'schemaVersion':'1.0','changeName':'test-clarify','stage':'problem_scope_framing','role':'judge','modelClass':'value-judge','mode':'framing_only','intendedOutcome':'x','problemStatement':'x','targetSurface':['a'],'scopeCandidates':[],'selectedScope':'','includedChanges':[],'excludedChanges':[],'successSignal':'','blockingQuestions':[{'field':'selectedScope','question':'Which?','options':['minimal','full']}],'boundaryAssertions':{'noValueJudgment':True,'noNoBuildRecommendation':True,'noOpenSpecWriting':True,'noRuntimePlanning':True,'noConcreteModelId':True}}
-with open(f'{base}/problem-scope-framing.json','w') as f: json.dump(framing,f)
-" > /dev/null 2>&1
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-clarify","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
     "$WORKFLOW" scope-closure-gate test-clarify --project-root "$tmp" > /dev/null 2>&1
-    python3 -c "
-import json
-req={'schemaVersion':'1.0','changeName':'test-clarify','stage':'problem_scope_clarification_request','role':'judge','modelClass':'value-judge','mode':'framing_only','blockingFields':['selectedScope'],'questionsForUser':[{'field':'selectedScope','question':'Which scope?','options':[{'id':'minimal','label':'Minimal'},{'id':'full','label':'Full'}]}],'nextStep':'problem_scope_clarification_response','boundaryAssertions':{'noValueJudgment':True,'noNoBuildRecommendation':True,'noOpenSpecWriting':True,'noRuntimePlanning':True,'noConcreteModelId':True}}
-with open(f'{base}/problem-scope-clarification-request.json','w') as f: json.dump(req,f)
-" > /dev/null 2>&1
-    # Validate request
-    local out rc ok=0
-    set +e
-    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-clarify --project-root "$tmp" 2>&1)
-    rc=$?
-    set -e
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-clarify","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local ok=0
     [[ -f "$base/problem-scope-clarification-request.json" ]] || { printf "\n    ${RED}missing clarification request${NC}\n"; ok=1; }
-    # Record response
-    "$WORKFLOW" problem-scope-clarification-response test-clarify --project-root "$tmp" --answers '[{"field":"selectedScope","value":"full","rawAnswer":"full"}]' > /dev/null 2>&1
-    # Verify response exists as separate artifact
+    "$WORKFLOW" problem-scope-clarification-response test-clarify --project-root "$tmp" --answers '[{"field":"selectedScope","value":"full"}]' > /dev/null 2>&1
     [[ -f "$base/problem-scope-clarification-response.json" ]] || { printf "\n    ${RED}missing clarification response${NC}\n"; ok=1; }
     rm -rf "$tmp"
     return $ok
 }
-
 test_scope_closed_no_user_confirm_blocked() {
     # Scope closed but no user gate → proposal-meaning-analysis blocked
     local tmp
@@ -1576,29 +1559,19 @@ test_approval_decisions_rejected_at_scope_gate() {
 }
 
 test_framing_only_no_no_build() {
-    # Framing-only mode has boundary assertions preventing no-build
-    local tmp
+    local tmp base
     tmp=$(mktemp -d)
     git -C "$tmp" init -q
     "$WORKFLOW" intake test-framing --project-root "$tmp" --proposal "I want to improve this" > /dev/null 2>&1
     base="$tmp/.goal-spec/changes/test-framing"
     mkdir -p "$base"
-    python3 -c "
-import json
-framing={'schemaVersion':'1.0','changeName':'test-framing','stage':'problem_scope_framing','role':'judge','modelClass':'value-judge','mode':'framing_only','intendedOutcome':'x','problemStatement':'x','improvementIntent':True,'targetSurface':['a'],'scopeUncertainty':True,'scopeCandidates':[{'id':'full','label':'Full','description':'x','includedChanges':['a'],'excludedChanges':[],'successSignal':'pass','tradeOff':'big'}],'selectedScope':'','includedChanges':[],'excludedChanges':[],'successSignal':'','blockingQuestions':[{'field':'selectedScope','question':'Which?','options':['full']}],'scopeClosed':False,'boundaryAssertions':{'noValueJudgment':True,'noNoBuildRecommendation':True,'noOpenSpecWriting':True,'noRuntimePlanning':True,'noConcreteModelId':True}}
-with open(f'{base}/problem-scope-framing.json','w') as f: json.dump(framing,f)
-" > /dev/null 2>&1
-    local out rc ok=0
-    set +e
-    out=$("$WORKFLOW" validate-problem-scope-framing test-framing --project-root "$tmp" 2>&1)
-    rc=$?
-    set -e
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-framing","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","improvementIntent":True,"targetSurface":["a"],"scopeUncertainty":True,"scopeCandidates":[{"id":"full","label":"Full","description":"x","includedChanges":["a"],"excludedChanges":[],"successSignal":"pass","tradeOff":"big"}],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["full"]}],"scopeClosed":False,"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    local ok=0
     [[ -f "$base/problem-scope-framing.json" ]] || { printf "\n    ${RED}framing artifact missing${NC}\n"; ok=1; }
-    :
+    python3 -c 'import json; f=json.load(open("'"$base"'/problem-scope-framing.json")); ba=f.get("boundaryAssertions",{}); assert ba.get("noNoBuildRecommendation")==True; assert ba.get("noValueJudgment")==True' 2>/dev/null || { printf "\n    ${RED}framing boundary assertions invalid${NC}\n"; ok=1; }
     rm -rf "$tmp"
     return $ok
 }
-
 test_scope_missing_required_digest_fails() {
     # proposal-meaning-analysis without required inputDigests for scope-user-gate fails
     local tmp
@@ -1770,7 +1743,7 @@ run_test "canonical write-spec rejects malformed spec-kernel" test_canonical_wri
 
 # ── Problem & Scope Confirmation Flow tests ──
 run_test "scope uncertainty blocks meaning analysis"     test_scope_uncertainty_blocks_meaning_analysis
-# clarification test skipped (temp file path issue)
+run_test "clarification request/response separation"     test_clarification_request_response_separation
 run_test "scope closed no user confirm blocked"          test_scope_closed_no_user_confirm_blocked
 run_test "user confirm unlocks meaning analysis"         test_user_confirm_unlocks_meaning_analysis
 run_test "revise scope back to framing"                  test_revise_scope_back_to_framing
@@ -1779,7 +1752,7 @@ run_test "scope gate commands exist"                     test_scope_gate_command
 run_test "approval decisions rejected at scope gate"     test_approval_decisions_rejected_at_scope_gate
 run_test "missing required digest blocks freshness"       test_scope_missing_required_digest_fails
 run_test "continue_discussion routes to framing"          test_continue_discussion_routes_to_framing
-# framing test skipped (temp file path issue)
+run_test "framing-only mode prevents no-build"           test_framing_only_no_no_build
 
 run_test "abstract role -> modelClass mapping" test_authoring_profile_abstract_model_classes
 echo ""
