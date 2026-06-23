@@ -1332,6 +1332,39 @@ test_canonical_write_spec_rejects_missing_approval() {
     return $ok
 }
 
+test_canonical_write_spec_rejects_malformed_spec_kernel() {
+    # Missing why, empty capabilities, missing successSignal — all blocked
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-badsk --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    python3 -c "
+import json, os, hashlib
+now = '2026-06-23T00:00:00Z'
+base = '$tmp/.goal-spec/changes/test-badsk'
+os.makedirs(base, exist_ok=True)
+# spec-kernel with empty capabilites and missing why + successSignal
+sk = {'schemaVersion':'1.0','changeName':'test-badsk','capabilities':[],'constraints':[],'nonGoals':[],'assumptions':[],'openQuestions':[]}
+with open(f'{base}/spec-kernel.json','w') as f: json.dump(sk, f)
+cvr = {'schemaVersion':'1.0','changeName':'test-badsk','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'approve_openspec_authoring','projectMeaning':'Test','logicClosureSummary':{},'inputDigests':{}}
+with open(f'{base}/change-value-assessment-report.json','w') as f: json.dump(cvr, f)
+cvr_d = hashlib.sha256(json.dumps(cvr,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+lcg = {'schemaVersion':'1.0','changeName':'test-badsk','gate':'logic_closure','status':'closed','closed':True,'sourceAssessment':'vlca.json','inputDigests':{},'nextStep':'change_value_assessment_report'}
+with open(f'{base}/logic-closure-gate.json','w') as f: json.dump(lcg, f)
+ag = {'schemaVersion':'1.0','changeName':'test-badsk','gate':'openspec_authoring_approval','decision':'approve_openspec_authoring','sourceReport':'change-value-assessment-report.json','inputDigests':{'change-value-assessment-report.json':cvr_d},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'ok','decidedAt':now,'readyForSpecKernel':True}
+with open(f'{base}/openspec-authoring-approval-gate.json','w') as f: json.dump(ag, f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-badsk --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "malformed spec-kernel blocks exit" || ok=1
+    assert_json_field "$out" "result" "canonical_gate_not_passed" "result" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_authoring_profile_abstract_model_classes() {
     python3 - <<PY
 import json
@@ -1433,6 +1466,7 @@ run_test "canonical write-spec rejects stale approval digest" test_canonical_wri
 run_test "canonical write-spec rejects non-authoring decision" test_canonical_write_spec_rejects_non_authoring_decision
 run_test "canonical write-spec rejects missing spec-kernel"  test_canonical_write_spec_rejects_missing_spec_kernel
 run_test "strict mode rejects missing canonical artifacts"   test_canonical_write_spec_rejects_missing_approval
+run_test "canonical write-spec rejects malformed spec-kernel" test_canonical_write_spec_rejects_malformed_spec_kernel
 
 run_test "abstract role -> modelClass mapping" test_authoring_profile_abstract_model_classes
 echo ""

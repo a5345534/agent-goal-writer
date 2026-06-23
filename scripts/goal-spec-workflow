@@ -1872,12 +1872,19 @@ def _run_canonical_gate_checks(lcg, approval, cvr, sk, base):
         errors.append(f"{SPEC_KERNEL_FILE} not found")
     else:
         errors.extend(_check_input_digests(sk, base))
-        for field in ("why", "capabilities", "constraints", "nonGoals", "successSignal"):
+        required_non_empty = ("why", "capabilities", "successSignal")
+        optional_present = ("constraints", "nonGoals", "assumptions", "openQuestions")
+        for field in required_non_empty:
             val = sk.get(field)
-            if val is None or (isinstance(val, str) and not val.strip()) and (isinstance(val, list) and len(val) == 0):
-                pass  # empty strings/arrays acceptable for constraints/nonGoals
-            elif val is None or (isinstance(val, str) and not val.strip()):
+            if val is None:
                 errors.append(f"spec-kernel missing required field: {field}")
+            elif isinstance(val, str) and not val.strip():
+                errors.append(f"spec-kernel required field is empty: {field}")
+            elif isinstance(val, list) and len(val) == 0:
+                errors.append(f"spec-kernel required field is empty: {field}")
+        for field in optional_present:
+            if field not in sk:
+                errors.append(f"spec-kernel missing field: {field}")
     for fp in base.rglob("*.json"):
         if "role-runs" in str(fp): continue
         try: text = fp.read_text()
