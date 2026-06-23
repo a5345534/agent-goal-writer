@@ -1599,6 +1599,72 @@ with open(f'{base}/problem-scope-framing.json','w') as f: json.dump(framing,f)
     return $ok
 }
 
+test_scope_missing_required_digest_fails() {
+    # proposal-meaning-analysis without required inputDigests for scope-user-gate fails
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-nodigest --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-nodigest"
+    mkdir -p "$base"
+    python3 -c "
+import json
+framing={'schemaVersion':'1.0','changeName':'test-nodigest','stage':'problem_scope_framing','role':'judge','modelClass':'value-judge','mode':'framing_only','intendedOutcome':'x','problemStatement':'x','targetSurface':['a'],'scopeCandidates':[],'selectedScope':'full','includedChanges':['a'],'excludedChanges':['b'],'successSignal':'pass','blockingQuestions':[],'scopeClosed':True,'boundaryAssertions':{'noValueJudgment':True,'noNoBuildRecommendation':True,'noOpenSpecWriting':True,'noRuntimePlanning':True,'noConcreteModelId':True}}
+with open(f'{base}/problem-scope-framing.json','w') as f: json.dump(framing,f)
+" > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-nodigest --project-root "$tmp" > /dev/null 2>&1
+    "$WORKFLOW" problem-scope-user-gate test-nodigest --project-root "$tmp" --decision confirm_scope_for_analysis > /dev/null 2>&1
+    # Create pma WITHOUT inputDigests
+    python3 -c "
+import json
+pma={'schemaVersion':'1.0','changeName':'test-nodigest','role':'judge','modelClass':'value-judge','proposalSummary':'x','meaningToProject':{'classification':'logic_enhancement','reason':'x'},'logicDuplicatePoints':[],'logicConflictPoints':[],'logicEnhancementPoints':[],'logicGapPoints':[],'boundaryFit':{'status':'satisfied','reason':'x'},'sourceScopeUserGate':'problem-scope-user-gate.json','confirmedScopeSummary':{'intendedOutcome':'x','problemStatement':'x','selectedScope':'full','includedChanges':['a'],'excludedChanges':['b'],'successSignal':'pass'}}
+with open(f'{base}/proposal-meaning-analysis.json','w') as f: json.dump(pma,f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" check-freshness test-nodigest --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    # Should fail because required inputDigests are missing
+    [[ "$rc" -eq 20 ]] || { printf "\n    ${RED}missing required digest should block (got exit $rc)${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_continue_discussion_routes_to_framing() {
+    # Verify next-step transition: openspec_authoring_approval_gate with continue_discussion → problem_scope_framing
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-contdisc --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-contdisc"
+    mkdir -p "$base"
+    # Create approval gate with continue_discussion
+    python3 -c "
+import json
+ag={'schemaVersion':'1.0','changeName':'test-contdisc','gate':'openspec_authoring_approval','decision':'continue_discussion','sourceReport':'cvr.json','inputDigests':{},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'test','decidedAt':'2026-06-23T00:00:00Z','readyForSpecKernel':False}
+with open('$base/openspec-authoring-approval-gate.json','w') as f: json.dump(ag,f)
+# Set workflow state to openspec_authoring_approval_gate
+state={'schemaVersion':'1.1','changeName':'test-contdisc','state':'openspec_authoring_approval_gate'}
+with open('$base/workflow-state.json','w') as f: json.dump(state,f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" next-step test-contdisc --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    # Accept either problem_scope_framing (new behavior) or old value_logic_closure_assessment
+    nxt=$(echo "$out" | python3 -c "import sys,json; print(json.load(sys.stdin).get('next',''))")
+    if [ "$nxt" = "problem_scope_framing" ]; then
+        ok=0
+    else
+        printf "\n    ${RED}next: expected 'problem_scope_framing', got '%s'${NC}\n" "$nxt"
+        ok=1
+    fi
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_authoring_profile_abstract_model_classes() {
     python3 - <<PY
 import json
@@ -1711,6 +1777,8 @@ run_test "revise scope back to framing"                  test_revise_scope_back_
 run_test "abandon proposal before analysis terminal"     test_abandon_proposal_before_analysis
 run_test "scope gate commands exist"                     test_scope_gate_commands_exist
 run_test "approval decisions rejected at scope gate"     test_approval_decisions_rejected_at_scope_gate
+run_test "missing required digest blocks freshness"       test_scope_missing_required_digest_fails
+run_test "continue_discussion routes to framing"          test_continue_discussion_routes_to_framing
 # framing test skipped (temp file path issue)
 
 run_test "abstract role -> modelClass mapping" test_authoring_profile_abstract_model_classes

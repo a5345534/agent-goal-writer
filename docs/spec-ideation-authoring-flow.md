@@ -10,6 +10,11 @@ closure, approval, and OpenSpec writing.
 |-------|------|------|-------------------|
 | 0 | Proposal Intake | deterministic | — |
 | 1 | Project Modeling | role | collector / evidence-collector |
+| 1.5 | Problem & Scope Framing | role | judge / value-judge (framing-only) |
+| 1.6 | Scope Closure Gate | gate | deterministic script |
+| 1.6-1 | Problem Scope Clarification Request | role | judge / value-judge |
+| 1.6-2 | Problem Scope Clarification Response | deterministic | — |
+| 1.7 | Problem-Scope User Confirmation Gate | gate | user decision |
 | 2 | Proposal Meaning Analysis | role | judge / value-judge |
 | 3 | Value & Logic Closure Assessment | role | judge / value-judge |
 | 4 | Logic Closure Gate | gate | deterministic script |

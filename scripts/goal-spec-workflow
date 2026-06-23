@@ -1946,6 +1946,29 @@ def _file_digest(path):
     """SHA-256 over exact UTF-8 file content."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+
+def _check_required_input_digests(data, base, filename):
+    """Verify required inputDigests are present and match for canonical artifacts."""
+    errors = []
+    required = REQUIRED_INPUT_DIGESTS.get(filename, [])
+    if not required:
+        return errors
+    input_digests = data.get("inputDigests", {})
+    if not isinstance(input_digests, dict):
+        return [f"missing inputDigests in {filename}"]
+    for req_file in required:
+        if req_file not in input_digests:
+            errors.append(f"missing required inputDigest for {req_file} in {filename}")
+            continue
+        path = base / req_file
+        if not path.exists():
+            errors.append(f"inputDigest references missing artifact: {req_file}")
+            continue
+        actual = _canonical_json_digest(read_json(path)) if path.suffix == ".json" else _file_digest(path)
+        if actual != input_digests[req_file]:
+            errors.append(f"stale inputDigest for {req_file} in {filename}")
+    return errors
+
 def _check_input_digests(data, base):
     errors = []
     input_digests = data.get("inputDigests", {})
@@ -2053,6 +2076,13 @@ def cmd_validate_proposal_meaning_analysis(args):
     if not scg or scg.get("status") != "closed":
         dump(json_report("validate-proposal-meaning-analysis","invalid_artifact","scope_not_closed",EXIT_BLOCKED,errors=["scope-closure-gate.status != closed"]))
         return EXIT_BLOCKED
+    # Check required inputDigests
+    pma = _load_artifact(base, PROPOSAL_MEANING_ANALYSIS_FILE)
+    if pma:
+        digest_errors = _check_required_input_digests(pma, base, PROPOSAL_MEANING_ANALYSIS_FILE)
+        if digest_errors:
+            dump(json_report("validate-proposal-meaning-analysis","invalid_artifact","stale_digests",EXIT_BLOCKED,errors=digest_errors))
+            return EXIT_BLOCKED
     # Run standard validation
     return _validate_artifact_cmd(args, PROPOSAL_MEANING_ANALYSIS_FILE, "validate-proposal-meaning-analysis", ("proposalSummary","logicDuplicatePoints","logicConflictPoints","logicEnhancementPoints","logicGapPoints","boundaryFit"))
 cmd_validate_value_logic_closure_assessment = lambda args: _validate_artifact_cmd(args, VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE, "validate-value-logic-closure-assessment", ("logicClosure","valueAssessment"))
@@ -2269,7 +2299,7 @@ def cmd_next_step(args):
     base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
     state = _load_artifact(base, WORKFLOW_STATE_FILE)
     current = state.get("state","proposal_intake") if state else "proposal_intake"
-    transitions = {"proposal_intake":"project_modeling","project_modeling":"proposal_meaning_analysis","proposal_meaning_analysis":"value_logic_closure_assessment","value_logic_closure_assessment":"logic_closure_gate","logic_closure_gate":"depends_on_gate","logic_gap_completion":"clarification_response","clarification_response":"value_logic_closure_assessment","change_value_assessment_report":"openspec_authoring_approval_gate","openspec_authoring_approval_gate":"depends_on_decision","spec_kernel":"pre_spec_gate","pre_spec_gate":"openspec_writing","openspec_writing":"explainer","explainer":"package_review","package_review":"handoff_ready","handoff_ready":"terminal"}
+    transitions = {"proposal_intake":"project_modeling","project_modeling":"problem_scope_framing","problem_scope_framing":"scope_closure_gate","proposal_meaning_analysis":"value_logic_closure_assessment","value_logic_closure_assessment":"logic_closure_gate","logic_closure_gate":"depends_on_gate","logic_gap_completion":"clarification_response","clarification_response":"value_logic_closure_assessment","change_value_assessment_report":"openspec_authoring_approval_gate","openspec_authoring_approval_gate":"depends_on_decision","spec_kernel":"pre_spec_gate","pre_spec_gate":"openspec_writing","openspec_writing":"explainer","explainer":"package_review","package_review":"handoff_ready","handoff_ready":"terminal"}
     next_s = transitions.get(current,"unknown")
     if current == "logic_closure_gate":
         gate = _load_artifact(base, LOGIC_CLOSURE_GATE_FILE)
@@ -2291,7 +2321,7 @@ def cmd_next_step(args):
         gate = _load_artifact(base, OPENSPEC_AUTHORING_APPROVAL_GATE_FILE)
         if gate:
             d = gate.get("decision","")
-            next_s = "spec_kernel" if d in ("approve_openspec_authoring","approve_smaller_scope_openspec_authoring") else ("value_logic_closure_assessment" if d=="continue_discussion" else "terminal")
+            next_s = "spec_kernel" if d in ("approve_openspec_authoring","approve_smaller_scope_openspec_authoring") else ("problem_scope_framing" if d=="continue_discussion" else "terminal")
     dump(json_report("next-step","pass",next_s,EXIT_PASS,current=current,next=next_s))
     return EXIT_PASS
 
@@ -2367,7 +2397,7 @@ def cmd_problem_scope_user_gate(args):
         return EXIT_USAGE
     framing = _load_artifact(base, PROBLEM_SCOPE_FRAMING_FILE)
     scope_gate = _load_artifact(base, SCOPE_CLOSURE_GATE_FILE)
-    gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"problem_scope_user_confirmation","sourceFraming":PROBLEM_SCOPE_FRAMING_FILE,"sourceGate":SCOPE_CLOSURE_GATE_FILE,"inputDigests":{PROBLEM_SCOPE_FRAMING_FILE:_canonical_json_digest(framing) if framing else "","SCOPE_CLOSURE_GATE_FILE":_canonical_json_digest(scope_gate) if scope_gate else ""},"scopeSummary":{"intendedOutcome":framing.get("intendedOutcome","") if framing else "","problemStatement":framing.get("problemStatement","") if framing else "","selectedScope":framing.get("selectedScope","") if framing else "","targetSurface":framing.get("targetSurface",[]) if framing else [],"includedChanges":framing.get("includedChanges",[]) if framing else [],"excludedChanges":framing.get("excludedChanges",[]) if framing else [],"successSignal":framing.get("successSignal","") if framing else ""},"decision":decision,"decidedBy":{"type":"human","id":"user"},"decisionRationale":getattr(args,'rationale','') or '','decidedAt':utc_now(),"nextStep":"proposal_meaning_analysis" if decision=="confirm_scope_for_analysis" else ("problem_scope_framing" if decision=="revise_scope" else "terminal")}
+    gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"problem_scope_user_confirmation","sourceFraming":PROBLEM_SCOPE_FRAMING_FILE,"sourceGate":SCOPE_CLOSURE_GATE_FILE,"inputDigests":{PROBLEM_SCOPE_FRAMING_FILE:_canonical_json_digest(framing) if framing else "",SCOPE_CLOSURE_GATE_FILE:_canonical_json_digest(scope_gate) if scope_gate else ""},"scopeSummary":{"intendedOutcome":framing.get("intendedOutcome","") if framing else "","problemStatement":framing.get("problemStatement","") if framing else "","selectedScope":framing.get("selectedScope","") if framing else "","targetSurface":framing.get("targetSurface",[]) if framing else [],"includedChanges":framing.get("includedChanges",[]) if framing else [],"excludedChanges":framing.get("excludedChanges",[]) if framing else [],"successSignal":framing.get("successSignal","") if framing else ""},"decision":decision,"decidedBy":{"type":"human","id":"user"},"decisionRationale":getattr(args,'rationale','') or '','decidedAt':utc_now(),"nextStep":"proposal_meaning_analysis" if decision=="confirm_scope_for_analysis" else ("problem_scope_framing" if decision=="revise_scope" else "terminal")}
     write_json(base / PROBLEM_SCOPE_USER_GATE_FILE, gate)
     dump(json_report("problem-scope-user-gate",decision,"terminal" if decision=="abandon_proposal" else "confirmed",EXIT_PASS,gateFile=str(base/PROBLEM_SCOPE_USER_GATE_FILE)))
     return EXIT_PASS

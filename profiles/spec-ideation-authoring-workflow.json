@@ -26,7 +26,7 @@
         "project-model.json"
       ],
       "validator": "validate-project-model",
-      "next": "proposal_meaning_analysis"
+      "next": "problem_scope_framing"
     },
     {
       "id": "problem_scope_framing",
@@ -206,7 +206,10 @@
         "approve_smaller_scope_openspec_authoring": "spec_kernel",
         "continue_discussion": "value_logic_closure_assessment",
         "accept_no_build_recommendation": "terminal",
-        "abandon_proposal": "terminal"
+        "abandon_proposal": "terminal",
+        "scope_changed_or_unclear": "problem_scope_framing",
+        "value_evidence_only": "value_logic_closure_assessment",
+        "clarification_answer_only": "value_logic_closure_assessment"
       }
     },
     {
