@@ -5,36 +5,64 @@
     "collector": {
       "modelClass": "evidence-collector",
       "promptTemplate": "prompts/ideation/project-modeling.md",
-      "requiredInputs": ["proposal-intake.json"],
-      "expectedOutputs": ["project-model.json"],
+      "requiredInputs": [
+        "proposal-intake.json"
+      ],
+      "expectedOutputs": [
+        "project-model.json"
+      ],
       "validator": "scripts/goal-spec-workflow validate-project-model",
-      "forbiddenActions": ["value_judgment", "openspec_writing", "runtime_planning", "concrete_model_selection"]
+      "forbiddenActions": [
+        "value_judgment",
+        "openspec_writing",
+        "runtime_planning",
+        "concrete_model_selection"
+      ]
     },
     "judge": {
       "modelClass": "value-judge",
       "promptTemplates": [
+        "prompts/ideation/problem-scope-framing.md",
+        "prompts/ideation/problem-scope-clarification-request.md",
         "prompts/ideation/proposal-meaning-analysis.md",
         "prompts/ideation/value-logic-closure-assessment.md",
         "prompts/ideation/logic-gap-completion.md",
         "prompts/ideation/change-value-assessment-report.md"
       ],
-      "forbiddenActions": ["openspec_writing", "runtime_planning", "concrete_model_selection"]
+      "forbiddenActions": [
+        "openspec_writing",
+        "runtime_planning",
+        "concrete_model_selection",
+        "no_build_before_scope_confirmation"
+      ]
     },
     "writer": {
       "modelClass": "spec-writer",
       "promptTemplate": "prompts/roles/writer.md",
       "requiredGate": "openspec-authoring-approval-gate.json",
-      "forbiddenActions": ["override_judge_decision", "runtime_planning", "concrete_model_selection"]
+      "forbiddenActions": [
+        "override_judge_decision",
+        "runtime_planning",
+        "concrete_model_selection"
+      ]
     },
     "explainer": {
       "modelClass": "explainer-writer",
       "promptTemplate": "prompts/roles/explainer.md",
-      "forbiddenActions": ["override_judge_decision", "runtime_planning", "concrete_model_selection"]
+      "forbiddenActions": [
+        "override_judge_decision",
+        "runtime_planning",
+        "concrete_model_selection"
+      ]
     },
     "reviewer": {
       "modelClass": "strict-reviewer",
       "promptTemplate": "prompts/roles/reviewer.md",
-      "forbiddenActions": ["silent_rewrite", "runtime_planning", "concrete_model_selection"]
+      "forbiddenActions": [
+        "silent_rewrite",
+        "runtime_planning",
+        "concrete_model_selection"
+      ]
     }
   }
 }

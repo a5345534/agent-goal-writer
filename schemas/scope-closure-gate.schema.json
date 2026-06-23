@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/scope-closure-gate.schema.json",
+  "title": "Scope Closure Gate",
+  "description": "Deterministic gate evaluating whether problem-scope-framing.json is structurally complete. Does NOT evaluate value, duplicates, or whether OpenSpec should be written.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "gate", "status", "closed", "sourceFraming", "inputDigests", "nextStep"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "gate": { "const": "scope_closure" },
+    "status": { "enum": ["closed", "not_closed"] },
+    "closed": { "type": "boolean" },
+    "sourceFraming": { "type": "string" },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "blockingFields": { "type": "array", "items": { "type": "string" } },
+    "nextStep": { "enum": ["problem_scope_clarification_request", "problem_scope_user_confirmation_gate"] },
+    "allowedNextSteps": {
+      "type": "array",
+      "items": { "enum": ["problem_scope_clarification_request", "problem_scope_user_confirmation_gate"] }
+    },
+    "reason": { "type": "string" }
+  }
+}

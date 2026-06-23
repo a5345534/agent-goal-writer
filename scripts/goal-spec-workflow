@@ -37,6 +37,18 @@ OPENSPEC_AUTHORING_APPROVAL_GATE_FILE = "openspec-authoring-approval-gate.json"
 SPEC_KERNEL_FILE = "spec-kernel.json"
 ROLE_RUNS_DIR = "role-runs"
 PACKAGE_REVIEW_FILE = "package-review.json"
+PROBLEM_SCOPE_FRAMING_FILE = "problem-scope-framing.json"
+SCOPE_CLOSURE_GATE_FILE = "scope-closure-gate.json"
+PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE = "problem-scope-clarification-request.json"
+PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE = "problem-scope-clarification-response.json"
+PROBLEM_SCOPE_USER_GATE_FILE = "problem-scope-user-gate.json"
+
+PROBLEM_SCOPE_USER_DECISIONS = (
+    "confirm_scope_for_analysis",
+    "revise_scope",
+    "abandon_proposal",
+)
+
 HANDOFF_READY_FILE = "handoff-ready.json"
 WORKFLOW_STATE_FILE = "workflow-state.json"
 EXTRACTED_CLAIMS_FILE = "extracted-claims.json"
@@ -109,6 +121,11 @@ REQUIRED_FRESHNESS_ARTIFACTS = (
     WRITE_SPEC_STATUS_FILE,
     PACKAGE_REVIEW_FILE,
     HANDOFF_READY_FILE,
+    PROBLEM_SCOPE_FRAMING_FILE,
+    SCOPE_CLOSURE_GATE_FILE,
+    PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE,
+    PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE,
+    PROBLEM_SCOPE_USER_GATE_FILE,
 )
 
 WORKFLOW_STATES = (
@@ -119,6 +136,9 @@ WORKFLOW_STATES = (
     "no_build_accepted", "proposal_abandoned", "discussion_continues",
     "spec_kernel_ready", "pre_spec_passed", "openspec_written",
     "explainer_written", "package_review_passed", "handoff_ready",
+    "problem_scope_framed", "scope_not_closed", "scope_clarification_requested",
+    "scope_clarification_received", "scope_closed", "problem_scope_confirmed",
+    "problem_scope_revision_requested", "proposal_abandoned_before_analysis",
 )
 
 EXIT_PASS = 0
@@ -2013,7 +2033,28 @@ def _validate_artifact_cmd(args, artifact_file, label, required_fields=()):
 
 cmd_validate_proposal_intake = lambda args: _validate_artifact_cmd(args, PROPOSAL_INTAKE_FILE, "validate-proposal-intake", ("rawProposal",))
 cmd_validate_project_model = lambda args: _validate_artifact_cmd(args, PROJECT_MODEL_FILE, "validate-project-model", ("projectPurpose","stageBoundary","sourceRefs"))
-cmd_validate_proposal_meaning_analysis = lambda args: _validate_artifact_cmd(args, PROPOSAL_MEANING_ANALYSIS_FILE, "validate-proposal-meaning-analysis", ("proposalSummary","logicDuplicatePoints","logicConflictPoints","logicEnhancementPoints","logicGapPoints","boundaryFit"))
+def cmd_validate_proposal_meaning_analysis(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("validate-proposal-meaning-analysis","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    # Check user gate prerequisite
+    psug = _load_artifact(base, PROBLEM_SCOPE_USER_GATE_FILE)
+    if not psug:
+        dump(json_report("validate-proposal-meaning-analysis","invalid_artifact","missing_scope_gate",EXIT_INVALID_ARTIFACT,errors=[f"{PROBLEM_SCOPE_USER_GATE_FILE} not found — scope must be confirmed before meaning analysis"]))
+        return EXIT_INVALID_ARTIFACT
+    if psug.get("decision") != "confirm_scope_for_analysis":
+        dump(json_report("validate-proposal-meaning-analysis","invalid_artifact","scope_not_confirmed",EXIT_BLOCKED,errors=[f"problem-scope-user-gate decision is {psug.get('decision')}, not confirm_scope_for_analysis"]))
+        return EXIT_BLOCKED
+    # Check scope closure gate
+    scg = _load_artifact(base, SCOPE_CLOSURE_GATE_FILE)
+    if not scg or scg.get("status") != "closed":
+        dump(json_report("validate-proposal-meaning-analysis","invalid_artifact","scope_not_closed",EXIT_BLOCKED,errors=["scope-closure-gate.status != closed"]))
+        return EXIT_BLOCKED
+    # Run standard validation
+    return _validate_artifact_cmd(args, PROPOSAL_MEANING_ANALYSIS_FILE, "validate-proposal-meaning-analysis", ("proposalSummary","logicDuplicatePoints","logicConflictPoints","logicEnhancementPoints","logicGapPoints","boundaryFit"))
 cmd_validate_value_logic_closure_assessment = lambda args: _validate_artifact_cmd(args, VALUE_LOGIC_CLOSURE_ASSESSMENT_FILE, "validate-value-logic-closure-assessment", ("logicClosure","valueAssessment"))
 
 
@@ -2233,6 +2274,19 @@ def cmd_next_step(args):
     if current == "logic_closure_gate":
         gate = _load_artifact(base, LOGIC_CLOSURE_GATE_FILE)
         next_s = "change_value_assessment_report" if (gate and gate.get("status")=="closed") else "logic_gap_completion"
+    elif current == "scope_closure_gate":
+        gate = _load_artifact(base, SCOPE_CLOSURE_GATE_FILE)
+        next_s = "problem_scope_user_confirmation_gate" if (gate and gate.get("status") == "closed") else "problem_scope_clarification_request"
+    elif current == "problem_scope_user_confirmation_gate":
+        gate = _load_artifact(base, PROBLEM_SCOPE_USER_GATE_FILE)
+        if gate:
+            d = gate.get("decision", "")
+            if d == "confirm_scope_for_analysis":
+                next_s = "proposal_meaning_analysis"
+            elif d == "revise_scope":
+                next_s = "problem_scope_framing"
+            elif d == "abandon_proposal":
+                next_s = "terminal"
     elif current == "openspec_authoring_approval_gate":
         gate = _load_artifact(base, OPENSPEC_AUTHORING_APPROVAL_GATE_FILE)
         if gate:
@@ -2241,6 +2295,82 @@ def cmd_next_step(args):
     dump(json_report("next-step","pass",next_s,EXIT_PASS,current=current,next=next_s))
     return EXIT_PASS
 
+
+
+def cmd_validate_problem_scope_framing(args):
+    return _validate_artifact_cmd(args, PROBLEM_SCOPE_FRAMING_FILE, "validate-problem-scope-framing", ("intendedOutcome", "problemStatement", "targetSurface", "boundaryAssertions"))
+
+def cmd_scope_closure_gate(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("scope-closure-gate","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    framing = _load_artifact(base, PROBLEM_SCOPE_FRAMING_FILE)
+    if not framing:
+        dump(json_report("scope-closure-gate","invalid_artifact","missing_framing",EXIT_INVALID_ARTIFACT,errors=[f"{PROBLEM_SCOPE_FRAMING_FILE} not found"]))
+        return EXIT_INVALID_ARTIFACT
+    blocking = []
+    if not framing.get("intendedOutcome","").strip(): blocking.append("intendedOutcome")
+    if not framing.get("problemStatement","").strip(): blocking.append("problemStatement")
+    if not framing.get("targetSurface"): blocking.append("targetSurface")
+    if not framing.get("selectedScope"): blocking.append("selectedScope")
+    if not framing.get("includedChanges"): blocking.append("includedChanges")
+    if "excludedChanges" not in framing: blocking.append("excludedChanges")
+    if not framing.get("successSignal","").strip(): blocking.append("successSignal")
+    ba = framing.get("boundaryAssertions",{})
+    if not ba.get("noNoBuildRecommendation"): blocking.append("boundaryAssertions.noNoBuildRecommendation")
+    if not ba.get("noValueJudgment"): blocking.append("boundaryAssertions.noValueJudgment")
+    status_val = "not_closed" if blocking else "closed"
+    next_step = "problem_scope_clarification_request" if blocking else "problem_scope_user_confirmation_gate"
+    gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"scope_closure","status":status_val,"closed":status_val=="closed","sourceFraming":PROBLEM_SCOPE_FRAMING_FILE,"inputDigests":{PROBLEM_SCOPE_FRAMING_FILE:_canonical_json_digest(framing)},"blockingFields":blocking,"nextStep":next_step,"allowedNextSteps":["problem_scope_clarification_request","problem_scope_user_confirmation_gate"],"reason":"Scope framing incomplete" if blocking else "All scope fields satisfied"}
+    write_json(base / SCOPE_CLOSURE_GATE_FILE, gate)
+    code = EXIT_PASS if status_val == "closed" else EXIT_BLOCKED
+    dump(json_report("scope-closure-gate",status_val,"generated",code,gateFile=str(base/SCOPE_CLOSURE_GATE_FILE),nextStep=next_step))
+    return code
+
+cmd_validate_problem_scope_clarification_request = lambda args: _validate_artifact_cmd(args, PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE, "validate-problem-scope-clarification-request", ("blockingFields","questionsForUser","boundaryAssertions"))
+
+def cmd_problem_scope_clarification_response(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    answers_raw = getattr(args,'answers','') or ''
+    if not answers_raw.strip():
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","missing_answers",EXIT_BLOCKED,errors=["--answers required"]))
+        return EXIT_BLOCKED
+    try:
+        answers = json.loads(answers_raw) if answers_raw.strip().startswith("[") else (json.loads(Path(answers_raw).read_text()) if Path(answers_raw).exists() else json.loads(answers_raw))
+    except Exception as err:
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","malformed",EXIT_INVALID_ARTIFACT,errors=[str(err)]))
+        return EXIT_INVALID_ARTIFACT
+    req = _load_artifact(base, PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE)
+    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"stage":"problem_scope_clarification_response","sourceRequest":PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE,"inputDigests":{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE:_canonical_json_digest(req)} if req else {},"answeredBy":{"type":"human","id":"user","source":"cli"},"answers":answers if isinstance(answers,list) else [answers],"readyForReframing":True,"nextStep":"problem_scope_framing"}
+    write_json(base / PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE, artifact)
+    dump(json_report("problem-scope-clarification-response","pass","captured",EXIT_PASS,artifactFile=str(base/PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE)))
+    return EXIT_PASS
+
+def cmd_problem_scope_user_gate(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("problem-scope-user-gate","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    decision = getattr(args,'decision','')
+    if decision not in PROBLEM_SCOPE_USER_DECISIONS:
+        dump(json_report("problem-scope-user-gate","invalid_artifact","invalid_decision",EXIT_USAGE,errors=[f"decision must be in {PROBLEM_SCOPE_USER_DECISIONS}"]))
+        return EXIT_USAGE
+    framing = _load_artifact(base, PROBLEM_SCOPE_FRAMING_FILE)
+    scope_gate = _load_artifact(base, SCOPE_CLOSURE_GATE_FILE)
+    gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"problem_scope_user_confirmation","sourceFraming":PROBLEM_SCOPE_FRAMING_FILE,"sourceGate":SCOPE_CLOSURE_GATE_FILE,"inputDigests":{PROBLEM_SCOPE_FRAMING_FILE:_canonical_json_digest(framing) if framing else "","SCOPE_CLOSURE_GATE_FILE":_canonical_json_digest(scope_gate) if scope_gate else ""},"scopeSummary":{"intendedOutcome":framing.get("intendedOutcome","") if framing else "","problemStatement":framing.get("problemStatement","") if framing else "","selectedScope":framing.get("selectedScope","") if framing else "","targetSurface":framing.get("targetSurface",[]) if framing else [],"includedChanges":framing.get("includedChanges",[]) if framing else [],"excludedChanges":framing.get("excludedChanges",[]) if framing else [],"successSignal":framing.get("successSignal","") if framing else ""},"decision":decision,"decidedBy":{"type":"human","id":"user"},"decisionRationale":getattr(args,'rationale','') or '','decidedAt':utc_now(),"nextStep":"proposal_meaning_analysis" if decision=="confirm_scope_for_analysis" else ("problem_scope_framing" if decision=="revise_scope" else "terminal")}
+    write_json(base / PROBLEM_SCOPE_USER_GATE_FILE, gate)
+    dump(json_report("problem-scope-user-gate",decision,"terminal" if decision=="abandon_proposal" else "confirmed",EXIT_PASS,gateFile=str(base/PROBLEM_SCOPE_USER_GATE_FILE)))
+    return EXIT_PASS
 
 
 
@@ -2363,6 +2493,38 @@ def build_parser() -> argparse.ArgumentParser:
     cncm.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
     cncm.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
     cncm.set_defaults(func=cmd_check_no_concrete_models)
+
+
+    # ── Problem & Scope Confirmation Flow commands ──
+    v_psf = subparsers.add_parser("validate-problem-scope-framing", parents=[common], help="validate problem-scope-framing.json")
+    v_psf.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_psf.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_psf.add_argument("--artifact", help="path to artifact file")
+    v_psf.set_defaults(func=cmd_validate_problem_scope_framing)
+
+    scg = subparsers.add_parser("scope-closure-gate", parents=[common], help="generate scope-closure-gate.json from framing")
+    scg.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    scg.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    scg.set_defaults(func=cmd_scope_closure_gate)
+
+    v_pscr = subparsers.add_parser("validate-problem-scope-clarification-request", parents=[common], help="validate problem-scope-clarification-request.json")
+    v_pscr.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    v_pscr.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    v_pscr.add_argument("--artifact", help="path to artifact file")
+    v_pscr.set_defaults(func=cmd_validate_problem_scope_clarification_request)
+
+    pscr = subparsers.add_parser("problem-scope-clarification-response", parents=[common], help="capture user answers to scope clarification")
+    pscr.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    pscr.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    pscr.add_argument("--answers", help="JSON answers array or path to JSON file", default="")
+    pscr.set_defaults(func=cmd_problem_scope_clarification_response)
+
+    psug = subparsers.add_parser("problem-scope-user-gate", parents=[common], help="record user scope confirmation decision")
+    psug.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    psug.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    psug.add_argument("--decision", required=True, help="user decision", choices=PROBLEM_SCOPE_USER_DECISIONS)
+    psug.add_argument("--rationale", default="", help="decision rationale")
+    psug.set_defaults(func=cmd_problem_scope_user_gate)
 
     init = subparsers.add_parser("init", parents=[common], help="create .goal-spec artifacts")
     init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .goal-spec/changes/<change-name>/")

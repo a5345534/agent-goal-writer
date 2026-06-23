@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/problem-scope-user-gate.schema.json",
+  "title": "Problem-Scope User Confirmation Gate",
+  "description": "User confirmation that the defined scope may proceed to Proposal Meaning Analysis. Only accepts confirm/revise/abandon — no approval or evaluation decisions.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "gate", "sourceFraming", "sourceGate", "inputDigests", "scopeSummary", "decision", "decidedBy", "decidedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "gate": { "const": "problem_scope_user_confirmation" },
+    "sourceFraming": { "type": "string" },
+    "sourceGate": { "type": "string" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "scopeSummary": {
+      "type": "object",
+      "required": ["intendedOutcome", "problemStatement", "selectedScope", "includedChanges", "excludedChanges", "successSignal"],
+      "additionalProperties": false,
+      "properties": {
+        "intendedOutcome": { "type": "string" },
+        "problemStatement": { "type": "string" },
+        "selectedScope": { "type": "string" },
+        "targetSurface": { "type": "array", "items": { "type": "string" } },
+        "includedChanges": { "type": "array", "items": { "type": "string" } },
+        "excludedChanges": { "type": "array", "items": { "type": "string" } },
+        "successSignal": { "type": "string" }
+      }
+    },
+    "decision": { "enum": ["confirm_scope_for_analysis", "revise_scope", "abandon_proposal"] },
+    "decidedBy": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["human", "role", "orchestrator", "policy"] },
+        "id": { "type": "string" }
+      }
+    },
+    "decisionRationale": { "type": "string" },
+    "decidedAt": { "type": "string" },
+    "nextStep": { "enum": ["proposal_meaning_analysis", "problem_scope_framing", "terminal"] }
+  }
+}

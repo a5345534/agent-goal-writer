@@ -323,6 +323,48 @@ Must include: project purpose, stage boundary, core components, existing
 capabilities, known boundaries, and source references. Must not contain
 value judgment, recommended path, approval decision, or OpenSpec draft.
 
+
+### 1.5 Problem & Scope Framing
+
+The **judge** (`value-judge`) operates in **framing-only mode** to clarify
+the user's problem, intended scope, and improvement intent before Proposal
+Meaning Analysis. Output: `problem-scope-framing.json`.
+
+Must not recommend no-build, evaluate value, classify as duplicate, or write
+OpenSpec during this stage.
+
+### 1.6 Scope Closure Gate
+
+A **deterministic script** verifies that `problem-scope-framing.json` is
+structurally complete. It does NOT evaluate value or duplicates.
+Output: `scope-closure-gate.json`.
+
+- **not_closed** → routes to Problem Scope Clarification Request (1.6-1)
+- **closed** → routes to Problem-Scope User Confirmation Gate (1.7)
+
+### 1.6-1 Problem Scope Clarification Request
+
+The **judge** produces bounded questions (max 1–2) when scope is not closed.
+Output: `problem-scope-clarification-request.json`. Every question maps to a
+blocking field and provides bounded options.
+
+### 1.6-2 Problem Scope Clarification Response
+
+A **deterministic step** captures the decision maker's answers.
+Output: `problem-scope-clarification-response.json`. Workflow loops back to
+Stage 1.5 for reframing.
+
+### 1.7 Problem-Scope User Confirmation Gate
+
+The user explicitly confirms the defined scope may proceed to Proposal Meaning
+Analysis. Output: `problem-scope-user-gate.json`.
+
+Allowed decisions: `confirm_scope_for_analysis` (proceed), `revise_scope`
+(back to 1.5), `abandon_proposal` (terminal — NOT no-build).
+
+Proposal Meaning Analysis SHALL NOT run until this gate passes with
+`confirm_scope_for_analysis`.
+
 ### 2. Proposal Meaning Analysis Step
 
 The **judge** (`value-judge`) analyzes the proposal against the project model.
@@ -465,6 +507,15 @@ No concrete provider/model IDs. Hard-block known concrete prefixes.
 Contextual-block provider/model patterns only near model/provider/binding
 keys. Allowed Stage 1 references: `modelClass`, `evidence-collector`,
 `value-judge`, `spec-writer`, `explainer-writer`, `strict-reviewer`.
+
+
+Before Proposal Meaning Analysis, the agent MUST close and confirm the
+problem/scope frame. Scope Closure Gate only proves the scope is well-formed.
+Problem-Scope User Confirmation Gate proves the user accepts the scope for
+analysis. If the user expresses intent to improve, complete, refine, or extend,
+treat improvement intent as provisionally established. The agent MUST NOT
+recommend no-build before scope closure and user confirmation when the user
+has expressed improvement intent.
 
 ### Compatibility
 

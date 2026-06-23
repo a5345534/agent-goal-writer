@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/problem-scope-clarification-request.schema.json",
+  "title": "Problem Scope Clarification Request",
+  "description": "Bounded questions produced by judge when scope is not closed. Max 1-2 questions per round, each mapping to a blocking field with options.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "stage", "role", "modelClass", "mode", "blockingFields", "questionsForUser", "boundaryAssertions"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "stage": { "const": "problem_scope_clarification_request" },
+    "role": { "const": "judge" },
+    "modelClass": { "const": "value-judge" },
+    "mode": { "const": "framing_only" },
+    "sourceFraming": { "type": "string" },
+    "sourceGate": { "type": "string" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "blockingFields": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "questionsForUser": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "question", "options"],
+        "additionalProperties": false,
+        "properties": {
+          "field": { "type": "string" },
+          "question": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "object" }, "minItems": 1 }
+        }
+      },
+      "minItems": 1,
+      "maxItems": 2
+    },
+    "nextStep": { "const": "problem_scope_clarification_response" },
+    "boundaryAssertions": {
+      "type": "object",
+      "required": ["noValueJudgment", "noNoBuildRecommendation", "noOpenSpecWriting", "noRuntimePlanning", "noConcreteModelId"],
+      "additionalProperties": false,
+      "properties": {
+        "noValueJudgment": { "type": "boolean" },
+        "noNoBuildRecommendation": { "type": "boolean" },
+        "noOpenSpecWriting": { "type": "boolean" },
+        "noRuntimePlanning": { "type": "boolean" },
+        "noConcreteModelId": { "type": "boolean" }
+      }
+    }
+  }
+}

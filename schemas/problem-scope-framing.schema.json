@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/problem-scope-framing.schema.json",
+  "title": "Problem & Scope Framing",
+  "description": "Captures the user's problem, intended scope, and improvement intent before Proposal Meaning Analysis. Judge operates in framing-only mode — no no-build, no value judgment.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "stage", "role", "modelClass", "mode", "intendedOutcome", "problemStatement", "targetSurface", "scopeCandidates", "boundaryAssertions"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "stage": { "const": "problem_scope_framing" },
+    "role": { "const": "judge" },
+    "modelClass": { "const": "value-judge" },
+    "mode": { "const": "framing_only" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "rawUserIntent": { "type": "string" },
+    "intendedOutcome": { "type": "string", "minLength": 1 },
+    "problemStatement": { "type": "string", "minLength": 1 },
+    "improvementIntent": { "type": "boolean" },
+    "targetSurface": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "scopeUncertainty": { "type": "boolean" },
+    "scopeCandidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "description", "includedChanges", "excludedChanges", "successSignal", "tradeOff"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "description": { "type": "string" },
+          "includedChanges": { "type": "array", "items": { "type": "string" } },
+          "excludedChanges": { "type": "array", "items": { "type": "string" } },
+          "successSignal": { "type": "string" },
+          "tradeOff": { "type": "string" }
+        }
+      },
+      "minItems": 1
+    },
+    "selectedScope": { "type": "string" },
+    "includedChanges": { "type": "array", "items": { "type": "string" } },
+    "excludedChanges": { "type": "array", "items": { "type": "string" } },
+    "successSignal": { "type": "string" },
+    "blockingQuestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "question", "options"],
+        "additionalProperties": false,
+        "properties": {
+          "field": { "type": "string" },
+          "question": { "type": "string" },
+          "options": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+        }
+      }
+    },
+    "scopeClosed": { "type": "boolean" },
+    "boundaryAssertions": {
+      "type": "object",
+      "required": ["noValueJudgment", "noNoBuildRecommendation", "noOpenSpecWriting", "noRuntimePlanning", "noConcreteModelId"],
+      "additionalProperties": false,
+      "properties": {
+        "noValueJudgment": { "type": "boolean" },
+        "noNoBuildRecommendation": { "type": "boolean" },
+        "noOpenSpecWriting": { "type": "boolean" },
+        "noRuntimePlanning": { "type": "boolean" },
+        "noConcreteModelId": { "type": "boolean" }
+      }
+    }
+  }
+}

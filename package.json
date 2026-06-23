@@ -59,7 +59,15 @@
     "schemas/openspec-authoring-approval-gate.schema.json",
     "schemas/role-run.schema.json",
     "schemas/spec-ideation-authoring-workflow.schema.json",
-    "schemas/spec-ideation-agent-launch-contract.schema.json"
+    "schemas/spec-ideation-agent-launch-contract.schema.json",
+    "docs/problem-scope-confirmation-flow.md",
+    "schemas/problem-scope-framing.schema.json",
+    "schemas/scope-closure-gate.schema.json",
+    "schemas/problem-scope-clarification-request.schema.json",
+    "schemas/problem-scope-clarification-response.schema.json",
+    "schemas/problem-scope-user-gate.schema.json",
+    "prompts/ideation/problem-scope-framing.md",
+    "prompts/ideation/problem-scope-clarification-request.md"
   ],
   "pi": {
     "skills": [

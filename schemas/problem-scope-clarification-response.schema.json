@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/a5345534/goal-spec/schemas/problem-scope-clarification-response.schema.json",
+  "title": "Problem Scope Clarification Response",
+  "description": "Captures the decision maker's answers to a clarification request. Contains no value judgment, no OpenSpec content.",
+  "type": "object",
+  "required": ["schemaVersion", "changeName", "stage", "sourceRequest", "answers", "readyForReframing"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "changeName": { "type": "string", "minLength": 1 },
+    "stage": { "const": "problem_scope_clarification_response" },
+    "sourceRequest": { "type": "string" },
+    "inputArtifacts": { "type": "array", "items": { "type": "string" } },
+    "inputDigests": { "type": "object", "additionalProperties": { "type": "string" } },
+    "answeredBy": {
+      "type": "object",
+      "required": ["type", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["human", "role", "orchestrator", "policy"] },
+        "id": { "type": "string" },
+        "source": { "type": "string" }
+      }
+    },
+    "answers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "value"],
+        "additionalProperties": false,
+        "properties": {
+          "field": { "type": "string" },
+          "value": { "type": "string" },
+          "rawAnswer": { "type": "string" }
+        }
+      },
+      "minItems": 1
+    },
+    "readyForReframing": { "type": "boolean" },
+    "nextStep": { "const": "problem_scope_framing" }
+  }
+}
