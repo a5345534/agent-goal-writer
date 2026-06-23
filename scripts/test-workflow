@@ -1133,6 +1133,205 @@ test_ack_without_rationale() {
     return $ok
 }
 
+# ── Canonical flow tests ──
+
+test_canonical_write_spec_no_value_gate() {
+    # Strict canonical mode succeeds without value-gate.json
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-canon --project-root "$tmp" --proposal "Implement canonical flow" > /dev/null 2>&1
+    # Create canonical artifacts
+    python3 -c "
+import json
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00','Z')
+base = '$tmp/.goal-spec/changes/test-canon'
+import os; os.makedirs(base, exist_ok=True)
+
+# spec-kernel.json
+sk = {'schemaVersion':'1.0','changeName':'test-canon','why':'Test canonical write-spec','capabilities':['Write OpenSpec from canonical artifacts'],'constraints':['No value-gate dependency'],'nonGoals':[],'successSignal':'All tests pass','assumptions':[],'openQuestions':[]}
+with open(f'{base}/spec-kernel.json','w') as f: json.dump(sk, f)
+
+# change-value-assessment-report.json
+cvr = {'schemaVersion':'1.0','changeName':'test-canon','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'approve_openspec_authoring','projectMeaning':'Test','logicClosureSummary':{},'inputDigests':{}}
+with open(f'{base}/change-value-assessment-report.json','w') as f: json.dump(cvr, f)
+
+# logic-closure-gate.json
+import hashlib
+cvr_digest = hashlib.sha256(json.dumps(cvr,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+lcg = {'schemaVersion':'1.0','changeName':'test-canon','gate':'logic_closure','status':'closed','closed':True,'sourceAssessment':'value-logic-closure-assessment.json','inputDigests':{'change-value-assessment-report.json':cvr_digest},'nextStep':'change_value_assessment_report'}
+with open(f'{base}/logic-closure-gate.json','w') as f: json.dump(lcg, f)
+
+# openspec-authoring-approval-gate.json
+ag = {'schemaVersion':'1.0','changeName':'test-canon','gate':'openspec_authoring_approval','decision':'approve_openspec_authoring','sourceReport':'change-value-assessment-report.json','inputDigests':{'change-value-assessment-report.json':cvr_digest},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'ok','decidedAt':now,'readyForSpecKernel':True}
+with open(f'{base}/openspec-authoring-approval-gate.json','w') as f: json.dump(ag, f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-canon --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "canonical write-spec exit" || ok=1
+    assert_json_field "$out" "result" "written" "result" || ok=1
+    # Verify no value-gate.json was needed
+    [[ ! -f "$tmp/.goal-spec/changes/test-canon/value-gate.json" ]] || { printf "\n    ${RED}unexpected value-gate.json dependency${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_canonical_write_spec_ignores_conflicting_value_gate() {
+    # Canonical mode uses canonical artifacts, not conflicting value-gate.json
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-canon2 --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    python3 -c "
+import json, os
+now = '2026-06-23T00:00:00Z'
+base = '$tmp/.goal-spec/changes/test-canon2'
+os.makedirs(base, exist_ok=True)
+# Create conflicting value-gate.json (blocked status)
+vg = {'schemaVersion':'1.0','status':'blocked','changeName':'test-canon2','capability':'bad','goal':'old','valueFrame':{'beneficiary':'x','problemOrOpportunity':'x','whyNow':'x','successSignal':'x','costRiskShape':'x','scopeSummary':'x','verificationPath':'x'},'decision':{'rationale':'x','noBuildConsidered':True,'smallerScopeConsidered':True}}
+with open(f'{base}/value-gate.json','w') as f: json.dump(vg, f)
+# Canonical artifacts matching test_canonical_write_spec_no_value_gate pattern
+sk = {'schemaVersion':'1.0','changeName':'test-canon2','why':'Canonical over legacy','capabilities':['Use canonical'],'constraints':[],'nonGoals':[],'successSignal':'pass','assumptions':[],'openQuestions':[]}
+with open(f'{base}/spec-kernel.json','w') as f: json.dump(sk, f)
+cvr = {'schemaVersion':'1.0','changeName':'test-canon2','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'approve_openspec_authoring','projectMeaning':'Test','logicClosureSummary':{},'inputDigests':{}}
+with open(f'{base}/change-value-assessment-report.json','w') as f: json.dump(cvr, f)
+import hashlib
+cvr_d = hashlib.sha256(json.dumps(cvr,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+lcg = {'schemaVersion':'1.0','changeName':'test-canon2','gate':'logic_closure','status':'closed','closed':True,'sourceAssessment':'vlca.json','inputDigests':{'change-value-assessment-report.json':cvr_d},'nextStep':'change_value_assessment_report'}
+with open(f'{base}/logic-closure-gate.json','w') as f: json.dump(lcg, f)
+ag = {'schemaVersion':'1.0','changeName':'test-canon2','gate':'openspec_authoring_approval','decision':'approve_openspec_authoring','sourceReport':'change-value-assessment-report.json','inputDigests':{'change-value-assessment-report.json':cvr_d},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'ok','decidedAt':now,'readyForSpecKernel':True}
+with open(f'{base}/openspec-authoring-approval-gate.json','w') as f: json.dump(ag, f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-canon2 --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "canonical ignores blocked value-gate exit" || ok=1
+    assert_json_field "$out" "result" "written" "result" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_canonical_write_spec_rejects_stale_approval_digest() {
+    # Approval gate with stale digest blocks write-spec
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-stale --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    python3 -c "
+import json, os
+now = '2026-06-23T00:00:00Z'
+base = '$tmp/.goal-spec/changes/test-stale'
+os.makedirs(base, exist_ok=True)
+sk = {'schemaVersion':'1.0','changeName':'test-stale','why':'Test','capabilities':['test'],'constraints':[],'nonGoals':[],'successSignal':'pass','assumptions':[],'openQuestions':[]}
+with open(f'{base}/spec-kernel.json','w') as f: json.dump(sk, f)
+cvr = {'schemaVersion':'1.0','changeName':'test-stale','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'approve_openspec_authoring','projectMeaning':'Test','logicClosureSummary':{}}
+with open(f'{base}/change-value-assessment-report.json','w') as f: json.dump(cvr, f)
+import hashlib
+# Approval gate references WRONG digest (stale)
+wrong = hashlib.sha256(b'stale').hexdigest()
+ag = {'schemaVersion':'1.0','changeName':'test-stale','gate':'openspec_authoring_approval','decision':'approve_openspec_authoring','sourceReport':'change-value-assessment-report.json','inputDigests':{'change-value-assessment-report.json':wrong},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'ok','decidedAt':now,'readyForSpecKernel':True}
+with open(f'{base}/openspec-authoring-approval-gate.json','w') as f: json.dump(ag, f)
+lcg = {'schemaVersion':'1.0','changeName':'test-stale','gate':'logic_closure','status':'closed','closed':True,'sourceAssessment':'vlca.json','inputDigests':{'change-value-assessment-report.json':wrong},'nextStep':'change_value_assessment_report'}
+with open(f'{base}/logic-closure-gate.json','w') as f: json.dump(lcg, f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-stale --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "stale digest blocks write-spec exit" || ok=1
+    assert_json_field "$out" "result" "canonical_gate_not_passed" "result" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_canonical_write_spec_rejects_non_authoring_decision() {
+    # Non-authoring approval decision blocks write-spec
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-continue --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    python3 -c "
+import json, os, hashlib
+now = '2026-06-23T00:00:00Z'
+base = '$tmp/.goal-spec/changes/test-continue'
+os.makedirs(base, exist_ok=True)
+sk = {'schemaVersion':'1.0','changeName':'test-continue','why':'Test','capabilities':['test'],'constraints':[],'nonGoals':[],'successSignal':'pass','assumptions':[],'openQuestions':[]}
+with open(f'{base}/spec-kernel.json','w') as f: json.dump(sk, f)
+cvr = {'schemaVersion':'1.0','changeName':'test-continue','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'continue_discussion','projectMeaning':'Test','logicClosureSummary':{}}
+with open(f'{base}/change-value-assessment-report.json','w') as f: json.dump(cvr, f)
+cvr_d = hashlib.sha256(json.dumps(cvr,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+# Approval says continue_discussion (not an authoring approval)
+ag = {'schemaVersion':'1.0','changeName':'test-continue','gate':'openspec_authoring_approval','decision':'continue_discussion','sourceReport':'change-value-assessment-report.json','inputDigests':{'change-value-assessment-report.json':cvr_d},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'think more','decidedAt':now,'readyForSpecKernel':False}
+with open(f'{base}/openspec-authoring-approval-gate.json','w') as f: json.dump(ag, f)
+lcg = {'schemaVersion':'1.0','changeName':'test-continue','gate':'logic_closure','status':'closed','closed':True,'sourceAssessment':'vlca.json','inputDigests':{'change-value-assessment-report.json':cvr_d},'nextStep':'change_value_assessment_report'}
+with open(f'{base}/logic-closure-gate.json','w') as f: json.dump(lcg, f)
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-continue --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "non-authoring decision blocks exit" || ok=1
+    assert_json_field "$out" "result" "canonical_gate_not_passed" "result" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_canonical_write_spec_rejects_missing_spec_kernel() {
+    # Missing spec-kernel blocks write-spec
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-nosk --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    python3 -c "
+import json, os, hashlib
+now = '2026-06-23T00:00:00Z'
+base = '$tmp/.goal-spec/changes/test-nosk'
+os.makedirs(base, exist_ok=True)
+cvr = {'schemaVersion':'1.0','changeName':'test-nosk','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'approve_openspec_authoring','projectMeaning':'Test','logicClosureSummary':{}}
+with open(f'{base}/change-value-assessment-report.json','w') as f: json.dump(cvr, f)
+cvr_d = hashlib.sha256(json.dumps(cvr,sort_keys=True,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+ag = {'schemaVersion':'1.0','changeName':'test-nosk','gate':'openspec_authoring_approval','decision':'approve_openspec_authoring','sourceReport':'change-value-assessment-report.json','inputDigests':{'change-value-assessment-report.json':cvr_d},'approvedBy':{'type':'human','id':'user'},'approvalRationale':'ok','decidedAt':now,'readyForSpecKernel':True}
+with open(f'{base}/openspec-authoring-approval-gate.json','w') as f: json.dump(ag, f)
+lcg = {'schemaVersion':'1.0','changeName':'test-nosk','gate':'logic_closure','status':'closed','closed':True,'sourceAssessment':'vlca.json','inputDigests':{},'nextStep':'change_value_assessment_report'}
+with open(f'{base}/logic-closure-gate.json','w') as f: json.dump(lcg, f)
+# Deliberately omit spec-kernel.json
+" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-nosk --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "missing spec-kernel blocks exit" || ok=1
+    assert_json_field "$out" "result" "canonical_gate_not_passed" "result" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_canonical_write_spec_rejects_missing_approval() {
+    # write-spec without canonical artifacts at all fails in strict mode
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-none --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" write-spec test-none --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "no canonical artifacts blocks exit" || ok=1
+    assert_json_field "$out" "result" "canonical_gate_not_passed" "result" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_authoring_profile_abstract_model_classes() {
     python3 - <<PY
 import json
@@ -1228,6 +1427,13 @@ echo ""
 
 # Section: Authoring profile
 echo "--- authoring profile ---"
+run_test "canonical write-spec without value-gate.json"    test_canonical_write_spec_no_value_gate
+run_test "canonical write-spec ignores conflicting value-gate" test_canonical_write_spec_ignores_conflicting_value_gate
+run_test "canonical write-spec rejects stale approval digest" test_canonical_write_spec_rejects_stale_approval_digest
+run_test "canonical write-spec rejects non-authoring decision" test_canonical_write_spec_rejects_non_authoring_decision
+run_test "canonical write-spec rejects missing spec-kernel"  test_canonical_write_spec_rejects_missing_spec_kernel
+run_test "strict mode rejects missing canonical artifacts"   test_canonical_write_spec_rejects_missing_approval
+
 run_test "abstract role -> modelClass mapping" test_authoring_profile_abstract_model_classes
 echo ""
 
