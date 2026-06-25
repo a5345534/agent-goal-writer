@@ -127,6 +127,56 @@ APPROVAL_DECISION_ALIASES = {
 
 APPROVER_TYPES = ("human", "role", "orchestrator", "policy")
 
+# ── Harness-neutral choice/action contract constants ──
+# Gate-to-request mappings produce ChoiceActionRequest instances from canonical gate decisions.
+# The shared schemas belong to goal-contract; goal-spec produces/consumes the portable requests.
+
+CHOICE_ACTION_REQUEST_FILE = "choice-action-request.json"
+CHOICE_ACTION_SELECTION_RESULT_FILE = "choice-action-selection-result.json"
+
+# Gate choice definitions for Stage 1.7 (problem-scope-user-gate)
+PROBLEM_SCOPE_USER_CHOICES = (
+    {"id": "confirm", "canonicalValue": "confirm_scope_for_analysis", "label": "Confirm scope and continue", "aliases": ["1", "c", "confirm", "continue", "proceed"]},
+    {"id": "revise", "canonicalValue": "revise_scope", "label": "Revise scope", "aliases": ["2", "r", "revise", "edit", "change_scope"]},
+    {"id": "abandon", "canonicalValue": "abandon_proposal", "label": "Abandon proposal", "aliases": ["3", "a", "abandon", "cancel", "stop"]},
+)
+
+# Gate choice definitions for Stage 5 (openspec-authoring-approval-gate)
+APPROVAL_CHOICES = (
+    {"id": "continue", "canonicalValue": "continue_discussion", "label": "Continue discussion", "aliases": ["1", "c", "continue", "discuss"]},
+    {"id": "approve", "canonicalValue": "approve_openspec_authoring", "label": "Approve OpenSpec authoring", "aliases": ["2", "a", "approve", "full"]},
+    {"id": "smaller", "canonicalValue": "approve_smaller_scope_openspec_authoring", "label": "Approve smaller-scope authoring", "aliases": ["3", "s", "smaller", "smaller_scope"]},
+    {"id": "no_build", "canonicalValue": "accept_no_build_recommendation", "label": "Accept no-build recommendation", "aliases": ["4", "n", "no_build", "no-build"]},
+    {"id": "abandon", "canonicalValue": "abandon_proposal", "label": "Abandon proposal", "aliases": ["5", "x", "abandon", "cancel", "stop"]},
+)
+
+# Gate registry mapping gate names to their choice definitions and alias tables
+GATE_CHOICE_REGISTRY = {
+    "problem-scope-user-gate": {
+        "gateConstant": "problem_scope_user_confirmation",
+        "gateFile": PROBLEM_SCOPE_USER_GATE_FILE,
+        "choices": PROBLEM_SCOPE_USER_CHOICES,
+        "aliases": PROBLEM_SCOPE_USER_DECISION_ALIASES,
+        "canonicalValues": PROBLEM_SCOPE_USER_DECISIONS,
+        "requestId": "problem-scope-user-gate",
+        "title": "Scope Confirmation",
+        "body": "Choose how to proceed with this scope before Proposal Meaning Analysis.",
+    },
+    "openspec-authoring-approval-gate": {
+        "gateConstant": "openspec_authoring_approval",
+        "gateFile": OPENSPEC_AUTHORING_APPROVAL_GATE_FILE,
+        "choices": APPROVAL_CHOICES,
+        "aliases": APPROVAL_DECISION_ALIASES,
+        "canonicalValues": APPROVAL_DECISIONS,
+        "requestId": "openspec-authoring-approval-gate",
+        "title": "OpenSpec Authoring Approval",
+        "body": "Choose the authoring path for this change. The change value assessment is complete.",
+    },
+}
+
+INPUT_MODE_VALUES = ("interactive", "text_alias", "canonical_text", "defaulted")
+RENDER_MODE_VALUES = ("interactive", "text_fallback", "unsupported")
+
 FORBIDDEN_RUNTIME_TOKENS = (
     ".dag.json", ".trace.json", "GoalDagSpec", "/goal --dag",
     "workspaceStrategy", "worktreeSlug", "controllerScenario",
@@ -2222,6 +2272,119 @@ def normalize_approval_decision(value: str) -> str:
     return APPROVAL_DECISION_ALIASES.get(token, token)
 
 
+# ── Choice-Action Contract helpers ──
+
+def build_choice_action_request(gate_name: str) -> dict[str, Any] | None:
+    """Build a ChoiceActionRequest from a gate's canonical decision options."""
+    reg = GATE_CHOICE_REGISTRY.get(gate_name)
+    if reg is None:
+        return None
+    choices = []
+    alias_lists = {}
+    for c in reg["choices"]:
+        cv = c["canonicalValue"]
+        # Collect aliases from the canonical alias table that map to this canonical value
+        gate_aliases = [a for a, v in reg["aliases"].items() if v == cv]
+        choices.append({
+            "id": c["id"],
+            "label": c["label"],
+            "canonicalValue": cv,
+            "aliases": gate_aliases,
+        })
+    # Build the fallback text prompt showing numbered choices
+    fallback_lines = [reg["title"]]
+    if reg.get("body"):
+        fallback_lines.append(reg["body"])
+    for idx, c in enumerate(choices, 1):
+        fallback_lines.append(f"[{idx}] {c['label']} -> {c['canonicalValue']}")
+    fallback_prompt = "\n".join(fallback_lines)
+    return {
+        "requestId": reg["requestId"],
+        "title": reg["title"],
+        "body": reg.get("body", ""),
+        "choices": choices,
+        "fallbackPrompt": fallback_prompt,
+        "allowTextAliases": True,
+    }
+
+
+def normalize_choice_action_result(gate_name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Normalize a ChoiceActionSelectionResult to extract the canonical gate decision.
+
+    Returns a dict with keys: valid (bool), canonicalDecision (str or None),
+    inputMode (str), renderMode (str), choiceId (str), errors (list of str).
+    """
+    errors = []
+    reg = GATE_CHOICE_REGISTRY.get(gate_name)
+    if reg is None:
+        return {"valid": False, "canonicalDecision": None, "inputMode": "", "renderMode": "", "choiceId": "", "errors": [f"Unknown gate: {gate_name}"]}
+    canonical_values = set(reg["canonicalValues"])
+    aliases = reg["aliases"]
+    # Validate required fields
+    choice_id = result.get("choiceId", "")
+    canonical_value = result.get("canonicalValue", "")
+    input_mode = result.get("inputMode", "")
+    render_mode = result.get("renderMode", "")
+    if not choice_id and not canonical_value:
+        errors.append("Result must include choiceId or canonicalValue")
+        return {"valid": False, "canonicalDecision": None, "inputMode": input_mode, "renderMode": render_mode, "choiceId": choice_id, "errors": errors}
+    # Map through canonical value
+    decision = None
+    if canonical_value in canonical_values:
+        decision = canonical_value
+    elif choice_id:
+        # Look up the choice by id
+        for c in reg["choices"]:
+            if c["id"] == choice_id:
+                decision = c["canonicalValue"]
+                break
+    # Try alias normalization
+    if decision is None:
+        token = _normalize_choice_token(canonical_value or choice_id)
+        decision = aliases.get(token, token)
+    if decision not in canonical_values:
+        errors.append(f"Cannot map selection to a valid canonical decision for {gate_name}: {canonical_value or choice_id}")
+        return {"valid": False, "canonicalDecision": None, "inputMode": input_mode, "renderMode": render_mode, "choiceId": choice_id, "errors": errors}
+    return {"valid": True, "canonicalDecision": decision, "inputMode": input_mode, "renderMode": render_mode, "choiceId": choice_id, "errors": errors}
+
+
+def cmd_choice_action_request(args: argparse.Namespace) -> int:
+    """Generate a ChoiceActionRequest JSON from a gate's decision options."""
+    gate_name = getattr(args, 'gate_name', '') or ''
+    req = build_choice_action_request(gate_name)
+    if req is None:
+        known = list(GATE_CHOICE_REGISTRY.keys())
+        report = json_report("choice-action-request", "invalid_artifact", "unknown_gate", EXIT_USAGE, errors=[f"Unknown gate: {gate_name}. Known gates: {known}"])
+        dump(report)
+        return EXIT_USAGE
+    dump(req)
+    return EXIT_PASS
+
+
+def cmd_choice_action_result(args: argparse.Namespace) -> int:
+    """Normalize a ChoiceActionSelectionResult to a canonical gate decision."""
+    gate_name = getattr(args, 'gate_name', '') or ''
+    raw_result = getattr(args, 'result', '') or ''
+    if not raw_result:
+        report = json_report("choice-action-result", "invalid_artifact", "missing_result", EXIT_USAGE, errors=["--result required"])
+        dump(report)
+        return EXIT_USAGE
+    try:
+        result_obj = json.loads(raw_result)
+    except json.JSONDecodeError as e:
+        report = json_report("choice-action-result", "invalid_artifact", "invalid_json", EXIT_USAGE, errors=[f"Invalid JSON: {e}"])
+        dump(report)
+        return EXIT_USAGE
+    normalized = normalize_choice_action_result(gate_name, result_obj)
+    if not normalized["valid"]:
+        report = json_report("choice-action-result", "invalid_artifact", "normalization_failed", EXIT_INVALID_ARTIFACT, errors=normalized["errors"])
+        dump(report)
+        return EXIT_INVALID_ARTIFACT
+    report = json_report("choice-action-result", normalized["canonicalDecision"], "normalized", EXIT_PASS, canonicalDecision=normalized["canonicalDecision"], inputMode=normalized["inputMode"], renderMode=normalized["renderMode"], choiceId=normalized["choiceId"])
+    dump(report)
+    return EXIT_PASS
+
+
 def decision_usage_message(canonical: tuple[str, ...], aliases: dict[str, str]) -> str:
     alias_lines = []
     for decision in canonical:
@@ -2787,6 +2950,16 @@ def build_parser() -> argparse.ArgumentParser:
     psug.add_argument("--decision", required=True, help="user decision; accepts canonical value, number, or short alias")
     psug.add_argument("--rationale", default="", help="decision rationale")
     psug.set_defaults(func=cmd_problem_scope_user_gate)
+
+    # ── Choice-Action Contract commands ──
+    car = subparsers.add_parser("choice-action-request", parents=[common], help="generate a ChoiceActionRequest from a gate's decision options")
+    car.add_argument("gate_name", help="gate name: problem-scope-user-gate or openspec-authoring-approval-gate")
+    car.set_defaults(func=cmd_choice_action_request)
+
+    cares = subparsers.add_parser("choice-action-result", parents=[common], help="normalize a ChoiceActionSelectionResult to a canonical gate decision")
+    cares.add_argument("--gate", required=True, dest="gate_name", help="gate name: problem-scope-user-gate or openspec-authoring-approval-gate")
+    cares.add_argument("--result", required=True, help="ChoiceActionSelectionResult JSON string")
+    cares.set_defaults(func=cmd_choice_action_result)
 
     init = subparsers.add_parser("init", parents=[common], help="create .goal-spec artifacts")
     init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .goal-spec/changes/<change-name>/")

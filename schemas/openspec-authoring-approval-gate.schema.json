@@ -32,6 +32,53 @@
     "approvalRationale": { "type": "string" },
     "approvedScope": { "type": "string" },
     "readyForSpecKernel": { "type": "boolean" },
-    "decidedAt": { "type": "string" }
+    "decidedAt": { "type": "string" },
+    "choiceActionRequest": {
+      "type": "object",
+      "description": "Optional ChoiceActionRequest representation of this gate's decisions for harness-neutral presentation.",
+      "required": ["requestId", "title", "choices", "fallbackPrompt"],
+      "additionalProperties": false,
+      "properties": {
+        "requestId": { "type": "string" },
+        "title": { "type": "string" },
+        "body": { "type": "string" },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "label", "canonicalValue", "aliases"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "canonicalValue": { "type": "string" },
+              "aliases": { "type": "array", "items": { "type": "string" } },
+              "description": { "type": "string" },
+              "disabled": { "type": "boolean" },
+              "disabledReason": { "type": "string" }
+            }
+          }
+        },
+        "fallbackPrompt": { "type": "string" },
+        "defaultChoiceId": { "type": "string" },
+        "allowTextAliases": { "type": "boolean" },
+        "metadata": { "type": "object" }
+      }
+    },
+    "choiceActionSelectionResult": {
+      "type": "object",
+      "description": "Optional ChoiceActionSelectionResult recording how the user's selection was normalized.",
+      "required": ["requestId", "choiceId", "canonicalValue", "inputMode", "renderMode"],
+      "additionalProperties": false,
+      "properties": {
+        "requestId": { "type": "string" },
+        "choiceId": { "type": "string" },
+        "canonicalValue": { "type": "string" },
+        "inputMode": { "enum": ["interactive", "text_alias", "canonical_text", "defaulted"] },
+        "renderMode": { "enum": ["interactive", "text_fallback", "unsupported"] },
+        "selectedAt": { "type": "string" }
+      }
+    }
   }
 }
