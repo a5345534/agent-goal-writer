@@ -1479,6 +1479,30 @@ with open(f'{base}/proposal-meaning-analysis.json','w') as f: json.dump(pma,f)
     return $ok
 }
 
+test_problem_scope_user_gate_accepts_aliases() {
+    # Numeric / short aliases normalize to canonical stored decisions.
+    local tmp base ok=0
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-alias --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-alias"
+    mkdir -p "$base"
+    python3 -c "
+import json
+framing={'schemaVersion':'1.0','changeName':'test-alias','stage':'problem_scope_framing','role':'judge','modelClass':'value-judge','mode':'framing_only','intendedOutcome':'x','problemStatement':'x','targetSurface':['a'],'scopeCandidates':[],'selectedScope':'full','includedChanges':['a'],'excludedChanges':['b'],'successSignal':'pass','blockingQuestions':[],'scopeClosed':True,'boundaryAssertions':{'noValueJudgment':True,'noNoBuildRecommendation':True,'noOpenSpecWriting':True,'noRuntimePlanning':True,'noConcreteModelId':True}}
+with open('$base/problem-scope-framing.json','w') as f: json.dump(framing,f)
+" > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-alias --project-root "$tmp" > /dev/null 2>&1
+    "$WORKFLOW" problem-scope-user-gate test-alias --project-root "$tmp" --decision 1 > /dev/null 2>&1 || ok=1
+    python3 -c 'import json; g=json.load(open("'"$base"'/problem-scope-user-gate.json")); assert g["decision"] == "confirm_scope_for_analysis"' 2>/dev/null || ok=1
+    "$WORKFLOW" problem-scope-user-gate test-alias --project-root "$tmp" --decision r > /dev/null 2>&1 || ok=1
+    python3 -c 'import json; g=json.load(open("'"$base"'/problem-scope-user-gate.json")); assert g["decision"] == "revise_scope"' 2>/dev/null || ok=1
+    "$WORKFLOW" problem-scope-user-gate test-alias --project-root "$tmp" --decision a > /dev/null 2>&1 || ok=1
+    python3 -c 'import json; g=json.load(open("'"$base"'/problem-scope-user-gate.json")); assert g["decision"] == "abandon_proposal"' 2>/dev/null || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_revise_scope_back_to_framing() {
     # revise_scope → back to problem_scope_framing
     local tmp
@@ -1600,6 +1624,29 @@ with open(f'{base}/proposal-meaning-analysis.json','w') as f: json.dump(pma,f)
     set -e
     # Should fail because required inputDigests are missing
     [[ "$rc" -eq 20 ]] || { printf "\n    ${RED}missing required digest should block (got exit $rc)${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_approval_gate_accepts_aliases() {
+    # Numeric / short aliases normalize to canonical approval decisions.
+    local tmp base ok=0
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-approval-alias --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-approval-alias"
+    mkdir -p "$base"
+    python3 -c "
+import json
+cvr={'schemaVersion':'1.0','changeName':'test-approval-alias','role':'judge','modelClass':'value-judge','verdict':'valuable_for_openspec_authoring','summary':'Test','recommendedPath':'approve_openspec_authoring','projectMeaning':'Test','logicClosureSummary':{},'inputDigests':{}}
+with open('$base/change-value-assessment-report.json','w') as f: json.dump(cvr,f)
+" > /dev/null 2>&1
+    "$WORKFLOW" approval-gate test-approval-alias --project-root "$tmp" --decision 2 --rationale ok > /dev/null 2>&1 || ok=1
+    python3 -c 'import json; g=json.load(open("'"$base"'/openspec-authoring-approval-gate.json")); assert g["decision"] == "approve_openspec_authoring"; assert g["readyForSpecKernel"] is True' 2>/dev/null || ok=1
+    "$WORKFLOW" approval-gate test-approval-alias --project-root "$tmp" --decision s --rationale ok > /dev/null 2>&1 || ok=1
+    python3 -c 'import json; g=json.load(open("'"$base"'/openspec-authoring-approval-gate.json")); assert g["decision"] == "approve_smaller_scope_openspec_authoring"; assert g["readyForSpecKernel"] is True' 2>/dev/null || ok=1
+    "$WORKFLOW" approval-gate test-approval-alias --project-root "$tmp" --decision n --rationale ok > /dev/null 2>&1 || ok=1
+    python3 -c 'import json; g=json.load(open("'"$base"'/openspec-authoring-approval-gate.json")); assert g["decision"] == "accept_no_build_recommendation"; assert g["readyForSpecKernel"] is False' 2>/dev/null || ok=1
     rm -rf "$tmp"
     return $ok
 }
@@ -1760,10 +1807,12 @@ test_lint_response_scope_selected_clean_pass() {
     set +e
     out=$("$WORKFLOW" lint-response --stage scope-selected --response-text "Selected scope: standard (filters + sorting)
 
-Before Proposal Meaning Analysis, choose exactly one:
-- confirm_scope_for_analysis
-- revise_scope
-- abandon_proposal" --project-root "$tmp" 2>&1)
+Before Proposal Meaning Analysis, choose one:
+[1] Confirm scope and continue -> confirm_scope_for_analysis
+[2] Revise scope -> revise_scope
+[3] Abandon proposal -> abandon_proposal
+
+You may reply with 1/2/3, c/r/a, or the canonical token." --project-root "$tmp" 2>&1)
     rc=$?
     set -e
     assert_exit 0 "$rc" "lint scope-selected clean pass exit" || ok=1
@@ -1886,11 +1935,13 @@ run_test "scope uncertainty blocks meaning analysis"     test_scope_uncertainty_
 run_test "clarification request/response separation"     test_clarification_request_response_separation
 run_test "scope closed no user confirm blocked"          test_scope_closed_no_user_confirm_blocked
 run_test "user confirm unlocks meaning analysis"         test_user_confirm_unlocks_meaning_analysis
+run_test "problem-scope user gate accepts aliases"       test_problem_scope_user_gate_accepts_aliases
 run_test "revise scope back to framing"                  test_revise_scope_back_to_framing
 run_test "abandon proposal before analysis terminal"     test_abandon_proposal_before_analysis
 run_test "scope gate commands exist"                     test_scope_gate_commands_exist
 run_test "approval decisions rejected at scope gate"     test_approval_decisions_rejected_at_scope_gate
 run_test "missing required digest blocks freshness"       test_scope_missing_required_digest_fails
+run_test "approval gate accepts aliases"                  test_approval_gate_accepts_aliases
 run_test "continue_discussion routes to framing"          test_continue_discussion_routes_to_framing
 run_test "framing-only mode prevents no-build"           test_framing_only_no_no_build
 

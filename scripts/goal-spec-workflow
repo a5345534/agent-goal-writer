@@ -82,6 +82,49 @@ APPROVAL_DECISIONS = (
     "approve_openspec_authoring",
 )
 
+PROBLEM_SCOPE_USER_DECISION_ALIASES = {
+    "1": "confirm_scope_for_analysis",
+    "c": "confirm_scope_for_analysis",
+    "confirm": "confirm_scope_for_analysis",
+    "confirm_scope": "confirm_scope_for_analysis",
+    "continue": "confirm_scope_for_analysis",
+    "proceed": "confirm_scope_for_analysis",
+    "2": "revise_scope",
+    "r": "revise_scope",
+    "revise": "revise_scope",
+    "edit": "revise_scope",
+    "change_scope": "revise_scope",
+    "3": "abandon_proposal",
+    "a": "abandon_proposal",
+    "abandon": "abandon_proposal",
+    "cancel": "abandon_proposal",
+    "stop": "abandon_proposal",
+}
+
+APPROVAL_DECISION_ALIASES = {
+    "1": "continue_discussion",
+    "c": "continue_discussion",
+    "continue": "continue_discussion",
+    "discuss": "continue_discussion",
+    "2": "approve_openspec_authoring",
+    "a": "approve_openspec_authoring",
+    "approve": "approve_openspec_authoring",
+    "full": "approve_openspec_authoring",
+    "3": "approve_smaller_scope_openspec_authoring",
+    "s": "approve_smaller_scope_openspec_authoring",
+    "smaller": "approve_smaller_scope_openspec_authoring",
+    "smaller_scope": "approve_smaller_scope_openspec_authoring",
+    "4": "accept_no_build_recommendation",
+    "n": "accept_no_build_recommendation",
+    "no_build": "accept_no_build_recommendation",
+    "no-build": "accept_no_build_recommendation",
+    "5": "abandon_proposal",
+    "x": "abandon_proposal",
+    "abandon": "abandon_proposal",
+    "cancel": "abandon_proposal",
+    "stop": "abandon_proposal",
+}
+
 APPROVER_TYPES = ("human", "role", "orchestrator", "policy")
 
 FORBIDDEN_RUNTIME_TOKENS = (
@@ -2165,6 +2208,28 @@ def cmd_clarification_response(args):
 cmd_validate_change_value_report = lambda args: _validate_artifact_cmd(args, CHANGE_VALUE_ASSESSMENT_REPORT_FILE, "validate-change-value-report", ("verdict","recommendedPath"))
 
 
+def _normalize_choice_token(value: str) -> str:
+    return (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def normalize_problem_scope_user_decision(value: str) -> str:
+    token = _normalize_choice_token(value)
+    return PROBLEM_SCOPE_USER_DECISION_ALIASES.get(token, token)
+
+
+def normalize_approval_decision(value: str) -> str:
+    token = _normalize_choice_token(value)
+    return APPROVAL_DECISION_ALIASES.get(token, token)
+
+
+def decision_usage_message(canonical: tuple[str, ...], aliases: dict[str, str]) -> str:
+    alias_lines = []
+    for decision in canonical:
+        samples = [alias for alias, mapped in aliases.items() if mapped == decision and len(alias) <= 12][:6]
+        alias_lines.append(f"{decision} (aliases: {', '.join(samples) if samples else 'none'})")
+    return "; ".join(alias_lines)
+
+
 def cmd_approval_gate(args):
     root = project_root(args.project_root)
     try: change_name = requested_change_name(args)
@@ -2172,9 +2237,10 @@ def cmd_approval_gate(args):
         dump(json_report("approval-gate","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
         return EXIT_USAGE
     base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
-    decision = getattr(args,'decision','')
+    raw_decision = getattr(args,'decision','')
+    decision = normalize_approval_decision(raw_decision)
     if decision not in APPROVAL_DECISIONS:
-        dump(json_report("approval-gate","invalid_artifact","invalid_decision",EXIT_USAGE,errors=[f"decision must be in {APPROVAL_DECISIONS}"]))
+        dump(json_report("approval-gate","invalid_artifact","invalid_decision",EXIT_USAGE,errors=[f"decision must be one of {APPROVAL_DECISIONS}; accepted aliases: {decision_usage_message(APPROVAL_DECISIONS, APPROVAL_DECISION_ALIASES)}"]))
         return EXIT_USAGE
     approver_type = getattr(args,'approved_by_type','human') or 'human'
     approver_id = getattr(args,'approved_by_id','user') or 'user'
@@ -2386,11 +2452,14 @@ def cmd_lint_response(args):
     # ── scope-selected checks ──
     elif stage == "scope-selected":
         detected_stage = "scope-selected"
-        # must include all three valid decisions
+        # must include all three valid decisions plus numbered choices for ergonomic input.
         required_decisions = ["confirm_scope_for_analysis", "revise_scope", "abandon_proposal"]
         for d in required_decisions:
             if d not in response:
                 missing_required.append(f"decision token: {d}")
+        for n in ("1", "2", "3"):
+            if not re.search(rf"(?:\[{n}\]|\b{n}[.)])", response):
+                missing_required.append(f"numbered choice: {n}")
         # must NOT contain approval-type decisions as valid options
         invalid_approval = ["approve_openspec_authoring", "approve_smaller_scope_openspec_authoring", "accept_no_build_recommendation"]
         for d in invalid_approval:
@@ -2416,6 +2485,9 @@ def cmd_lint_response(args):
         for d in ["confirm_scope_for_analysis", "revise_scope", "abandon_proposal"]:
             if d not in response:
                 missing_required.append(f"valid Stage 1.7 decision: {d}")
+        for n in ("1", "2", "3"):
+            if not re.search(rf"(?:\[{n}\]|\b{n}[.)])", response):
+                missing_required.append(f"numbered choice: {n}")
 
     # ── digest-check ──
     elif stage == "digest-check":
@@ -2550,9 +2622,10 @@ def cmd_problem_scope_user_gate(args):
         dump(json_report("problem-scope-user-gate","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
         return EXIT_USAGE
     base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
-    decision = getattr(args,'decision','')
+    raw_decision = getattr(args,'decision','')
+    decision = normalize_problem_scope_user_decision(raw_decision)
     if decision not in PROBLEM_SCOPE_USER_DECISIONS:
-        dump(json_report("problem-scope-user-gate","invalid_artifact","invalid_decision",EXIT_USAGE,errors=[f"decision must be in {PROBLEM_SCOPE_USER_DECISIONS}"]))
+        dump(json_report("problem-scope-user-gate","invalid_artifact","invalid_decision",EXIT_USAGE,errors=[f"decision must be one of {PROBLEM_SCOPE_USER_DECISIONS}; accepted aliases: {decision_usage_message(PROBLEM_SCOPE_USER_DECISIONS, PROBLEM_SCOPE_USER_DECISION_ALIASES)}"]))
         return EXIT_USAGE
     framing = _load_artifact(base, PROBLEM_SCOPE_FRAMING_FILE)
     scope_gate = _load_artifact(base, SCOPE_CLOSURE_GATE_FILE)
@@ -2633,7 +2706,7 @@ def build_parser() -> argparse.ArgumentParser:
     ag = subparsers.add_parser("approval-gate", parents=[common], help="record OpenSpec authoring approval decision")
     ag.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
     ag.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
-    ag.add_argument("--decision", required=True, help="approval decision", choices=APPROVAL_DECISIONS)
+    ag.add_argument("--decision", required=True, help="approval decision; accepts canonical value, number, or short alias")
     ag.add_argument("--approved-by-type", default="human", help="approver type")
     ag.add_argument("--approved-by-id", default="user", help="approver id")
     ag.add_argument("--approved-scope", help="scope for smaller-scope approval")
@@ -2711,7 +2784,7 @@ def build_parser() -> argparse.ArgumentParser:
     psug = subparsers.add_parser("problem-scope-user-gate", parents=[common], help="record user scope confirmation decision")
     psug.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
     psug.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
-    psug.add_argument("--decision", required=True, help="user decision", choices=PROBLEM_SCOPE_USER_DECISIONS)
+    psug.add_argument("--decision", required=True, help="user decision; accepts canonical value, number, or short alias")
     psug.add_argument("--rationale", default="", help="decision rationale")
     psug.set_defaults(func=cmd_problem_scope_user_gate)
 

@@ -151,9 +151,10 @@ truth:
    override rationale, `[ASSUMPTION]` tags, risks, and open questions in the
    OpenSpec sources.
 
-Tone rules:
+Tone and language rules:
 
 - Be direct, respectful, and evidence-grounded.
+- Reply in the same natural language/script the user is using unless the user explicitly asks otherwise; keep canonical artifact tokens in their required machine-readable form.
 - Do not shame the request or the user.
 - Do not pretend uncertainty is certainty.
 - Do not bury disagreement in hedging when the value/risk issue is material.
@@ -322,11 +323,11 @@ content, the agent MUST apply this first-response routing contract:
 | Condition | Allowed response |
 | --- | --- |
 | Scope uncertain or `scopeUncertainty=true` | Stage 1.5 Problem & Scope Framing only; if not closed, Stage 1.6-1 bounded clarification request. |
-| User selected a scope but did not provide `confirm_scope_for_analysis` | Summarize selected scope and request exactly `confirm_scope_for_analysis`, `revise_scope`, or `abandon_proposal`. |
-| User provides `confirm_scope_for_analysis` | Stage 2 Proposal Meaning Analysis may proceed, subject to artifact/input availability. |
-| User provides `revise_scope` | Return to Stage 1.5 framing. |
-| User provides `abandon_proposal` | Terminate the proposal; do NOT label it no-build. |
-| User provides Stage 5 approval (e.g., `approve_openspec_authoring`) before Stage 5 | Reject as INVALID for Stage 1.7 and show the three valid Stage 1.7 decisions. |
+| User selected a scope but did not provide `confirm_scope_for_analysis` or an accepted alias | Summarize selected scope in the user's language and show numbered choices for `confirm_scope_for_analysis`, `revise_scope`, and `abandon_proposal`. |
+| User provides `confirm_scope_for_analysis` or alias `1`, `c`, `confirm`, `continue`, or `proceed` | Stage 2 Proposal Meaning Analysis may proceed, subject to artifact/input availability. |
+| User provides `revise_scope` or alias `2`, `r`, `revise`, `edit`, or `change_scope` | Return to Stage 1.5 framing. |
+| User provides `abandon_proposal` or alias `3`, `a`, `abandon`, `cancel`, or `stop` | Terminate the proposal; do NOT label it no-build. |
+| User provides Stage 5 approval (e.g., `approve_openspec_authoring`) before Stage 5 | Reject as INVALID for Stage 1.7 and show the three valid Stage 1.7 decisions with numeric aliases. |
 | User chooses `continue_discussion` while scope is uncertain | Return to Stage 1.5 framing/clarification, NOT Value & Logic Closure Assessment. |
 | Required `inputDigests` are missing | Block freshness; do NOT accept the artifact. |
 
@@ -367,11 +368,15 @@ MUST use this structure:
 ```text
 Selected scope: <scope summary>
 
-Before Proposal Meaning Analysis, choose exactly one:
-- confirm_scope_for_analysis
-- revise_scope
-- abandon_proposal
+Before Proposal Meaning Analysis, choose one:
+[1] Confirm scope and continue → confirm_scope_for_analysis
+[2] Revise scope → revise_scope
+[3] Abandon proposal → abandon_proposal
+
+You may reply with 1/2/3, c/r/a, or the canonical token.
 ```
+
+Localize the visible labels to the user's language, but keep the canonical tokens unchanged.
 
 ### Persisted-State Honesty
 
