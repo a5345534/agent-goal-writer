@@ -457,6 +457,18 @@ Allowed decisions: `confirm_scope_for_analysis` (proceed), `revise_scope`
 Proposal Meaning Analysis SHALL NOT run until this gate passes with
 `confirm_scope_for_analysis`.
 
+**Harness-neutral choice/action contract.** The gate's decision options MAY be
+expressed as a `ChoiceActionRequest` so capable harnesses can render the same
+decision surface as selectors, buttons, or menus without hard-coding Pi
+presentation. Harnesses that lack interactive UI SHALL render the equivalent
+text fallback (numbered choices with aliases). The selected
+`ChoiceActionSelectionResult` MUST be normalized to the canonical gate decision
+before persistence. Existing canonical decisions, numeric aliases (`1`, `2`,
+`3`), short aliases (`c`, `r`, `a`, `confirm`, `revise`, `abandon`), canonical
+text inputs (`confirm_scope_for_analysis`, `revise_scope`, `abandon_proposal`),
+and persisted artifact values MUST remain backward-compatible. See
+[Choice-Action Contract Integration](#choice-action-contract-integration) below.
+
 ### 2. Proposal Meaning Analysis Step
 
 The **judge** (`value-judge`) analyzes the proposal against the project model.
@@ -526,6 +538,103 @@ Allowed decisions:
 The gate must reference the current change value report digest. The gate
 must not use `execute_implementation` or any implementation-implying language.
 Approver types: `human`, `role`, `orchestrator`, `policy`.
+
+**Harness-neutral choice/action contract.** The gate's decision options MAY be
+expressed as a `ChoiceActionRequest` so capable harnesses can render the same
+decision surface as selectors, buttons, or menus. Harnesses that lack
+interactive UI SHALL render the equivalent text fallback (numbered choices with
+aliases). The selected `ChoiceActionSelectionResult` MUST be normalized to the
+canonical gate decision before persistence. Existing canonical decisions,
+numeric aliases (`1`–`5`), short aliases (`c`, `a`, `s`, `n`, `x`, `continue`,
+`approve`, `smaller`, `no_build`, `abandon`), canonical text inputs, and
+persisted artifact values MUST remain backward-compatible. See
+[Choice-Action Contract Integration](#choice-action-contract-integration) below.
+
+### Choice-Action Contract Integration
+
+Goal-spec gates MAY express their bounded decision options as harness-neutral
+`ChoiceActionRequest` instances so capable harnesses can render the same
+decision surface with their native affordances (selectors, buttons, menus)
+while limited harnesses remain conformant through equivalent text fallback.
+
+**Contract ownership.** The shared `ChoiceActionRequest` and
+`ChoiceActionSelectionResult` schemas/types belong to `goal-contract` as
+reusable cross-repo contracts. Harness rendering adapters belong to
+`goal-runner`. Goal-spec owns which gate choices exist and how selected
+canonical decisions are recorded in workflow artifacts.
+
+**Gate-to-request mapping.** Each gate's canonical decisions map to a
+`ChoiceActionRequest` as follows:
+
+- `requestId`: stable id derived from the gate name (e.g.,
+  `problem-scope-user-gate`, `openspec-authoring-approval-gate`).
+- `title`: user-facing title localizable by the producer or presentation layer.
+- `body`: optional explanatory text describing the decision to the user.
+- `choices`: ordered array of choices, one per canonical decision.
+  - `id`: stable choice id unique within the request.
+  - `label`: visible label, localizable.
+  - `canonicalValue`: the canonical decision token persisted in the gate
+    artifact (e.g., `confirm_scope_for_analysis`, `approve_openspec_authoring`).
+  - `aliases`: accepted numeric and short text aliases.
+  - `description`: optional supporting text.
+  - `disabled`, `disabledReason`: optional availability state.
+- `fallbackPrompt`: text representation for non-interactive surfaces rendering
+  the numbered choices and accepted aliases.
+- `defaultChoiceId`: optional default for timeout or default behavior.
+- `allowTextAliases`: whether aliases may be accepted as input (SHOULD be
+  `true` for goal-spec gates).
+
+**Stage 1.7 gate choices** map to a three-choice request:
+
+| `id` | `canonicalValue` | Numeric alias | Short aliases |
+|------|-----------------|---------------|---------------|
+| `confirm` | `confirm_scope_for_analysis` | `1` | `c`, `confirm`, `continue`, `proceed` |
+| `revise` | `revise_scope` | `2` | `r`, `revise`, `edit`, `change_scope` |
+| `abandon` | `abandon_proposal` | `3` | `a`, `abandon`, `cancel`, `stop` |
+
+**Stage 5 gate choices** map to a five-choice request:
+
+| `id` | `canonicalValue` | Numeric alias | Short aliases |
+|------|-----------------|---------------|---------------|
+| `continue` | `continue_discussion` | `1` | `c`, `continue`, `discuss` |
+| `approve` | `approve_openspec_authoring` | `2` | `a`, `approve`, `full` |
+| `smaller` | `approve_smaller_scope_openspec_authoring` | `3` | `s`, `smaller`, `smaller_scope` |
+| `no_build` | `accept_no_build_recommendation` | `4` | `n`, `no_build`, `no-build` |
+| `abandon` | `abandon_proposal` | `5` | `x`, `abandon`, `cancel`, `stop` |
+
+**Result normalization.** When a harness returns a
+`ChoiceActionSelectionResult`, the consumer normalizes the selected
+`canonicalValue` or `choiceId` to the canonical gate decision before
+persistence:
+
+- If `inputMode` is `text_alias`, the alias is mapped to the canonical decision
+  using the same alias tables the deterministic gate commands use.
+- If `inputMode` is `canonical_text`, the value is validated against the
+  canonical decision set.
+- If `inputMode` is `interactive`, the selected `choiceId` or `canonicalValue`
+  maps directly.
+- If `inputMode` is `defaulted`, the default choice's canonical value is used.
+- `renderMode` records whether the harness used `interactive`,
+  `text_fallback`, or `unsupported` presentation. This metadata is
+  non-authoritative; the persisted canonical decision is the same regardless
+  of render mode.
+
+**Backward compatibility.** The choice/action contract is additive. Existing
+numbered text prompts, short aliases, canonical text inputs, and persisted
+artifact values remain valid. Harnesses without interactive UI continue to
+render the fallback numbered text prompt. Canonical gate decisions stored in
+`problem-scope-user-gate.json` and `openspec-authoring-approval-gate.json` are
+unchanged.
+
+**Helper commands.** The `goal-spec-workflow` script provides:
+
+```bash
+# Generate a ChoiceActionRequest from a gate's decision options
+<skill-dir>/scripts/goal-spec-workflow choice-action-request <gate-name> --project-root <project-root>
+
+# Normalize a ChoiceActionSelectionResult to a canonical decision
+<skill-dir>/scripts/goal-spec-workflow choice-action-result --gate <gate-name> --result <result-json> --project-root <project-root>
+```
 
 ### 6. Spec Kernel Step
 
