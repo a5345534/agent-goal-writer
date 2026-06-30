@@ -1423,6 +1423,107 @@ test_clarification_request_response_separation() {
     rm -rf "$tmp"
     return $ok
 }
+
+test_clarification_request_rejects_multi_question() {
+    # >1 question in questionsForUser must be rejected with exit 40
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-multi-q --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-multi-q"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-multi-q","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-multi-q --project-root "$tmp" > /dev/null 2>&1
+    # Request with TWO questions instead of exactly one
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-multi-q","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope","successSignal"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Cannot proceed without scope","recommendedAnswer":"minimal","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]},{"field":"successSignal","question":"What success signal?","whyThisMatters":"Cannot close scope without success signal","recommendedAnswer":"tests pass","options":[{"id":"tests","label":"All tests pass"},{"id":"demo","label":"Demo works"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-multi-q --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 40 "$rc" "multi-question request must exit 40" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert any('exactly one' in e.lower() for e in d.get('errors',[]))" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}error does not mention exactly-one requirement${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_clarification_request_requires_why_this_matters() {
+    # Single question without whyThisMatters/recommendedAnswer must fail exit 40
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-missing-detail --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-missing-detail"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-missing-detail","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-missing-detail --project-root "$tmp" > /dev/null 2>&1
+    # Request with single question but missing whyThisMatters and recommendedAnswer
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-missing-detail","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-missing-detail --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 40 "$rc" "missing whyThisMatters must exit 40" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); errors=d.get('errors',[]); assert any('whyThisMatters' in e for e in errors) or any('recommendedAnswer' in e for e in errors)" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}error does not mention missing whyThisMatters/recommendedAnswer${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_clarification_response_rejects_multi_answer() {
+    # >1 answer in response must be rejected with exit 40
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-multi-a --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-multi-a"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-multi-a","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-multi-a --project-root "$tmp" > /dev/null 2>&1
+    # Create request with single question
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-multi-a","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Need scope to proceed","recommendedAnswer":"minimal","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    # Response with TWO answers
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" problem-scope-clarification-response test-multi-a --project-root "$tmp" --answers '[{"field":"selectedScope","value":"full"},{"field":"successSignal","value":"pass"}]' 2>&1)
+    rc=$?
+    set -e
+    assert_exit 40 "$rc" "multi-answer response must exit 40" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_clarification_single_question_valid_pass() {
+    # Proper single question with all required fields must pass
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-valid-single --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-valid-single"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-valid-single","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-valid-single --project-root "$tmp" > /dev/null 2>&1
+    # Valid single question with whyThisMatters and recommendedAnswer
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-valid-single","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Cannot proceed without a clear scope selection","recommendedAnswer":"minimal — smallest valuable change","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-valid-single --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "valid single-question request must exit 0" || ok=1
+    # Also verify the response for a single answer passes
+    set +e
+    out=$("$WORKFLOW" problem-scope-clarification-response test-valid-single --project-root "$tmp" --answers '[{"field":"selectedScope","value":"full"}]' 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "valid single-answer response must exit 0" || ok=1
+    [[ -f "$base/problem-scope-clarification-response.json" ]] || { printf "\n    ${RED}missing clarification response${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_scope_closed_no_user_confirm_blocked() {
     # Scope closed but no user gate → proposal-meaning-analysis blocked
     local tmp
@@ -1866,6 +1967,288 @@ for role, model_class in expected.items():
 PY
 }
 
+# ── Design Tree tests ──
+
+test_design_tree_commands_exist() {
+    "$WORKFLOW" --help 2>&1 | grep -q "design-tree-add-question" || { printf "\n    ${RED}missing design-tree-add-question command${NC}\n"; return 1; }
+    "$WORKFLOW" --help 2>&1 | grep -q "design-tree-answer-question" || { printf "\n    ${RED}missing design-tree-answer-question command${NC}\n"; return 1; }
+    "$WORKFLOW" --help 2>&1 | grep -q "design-tree-status" || { printf "\n    ${RED}missing design-tree-status command${NC}\n"; return 1; }
+    "$WORKFLOW" --help 2>&1 | grep -q "design-tree-get-active" || { printf "\n    ${RED}missing design-tree-get-active command${NC}\n"; return 1; }
+    return 0
+}
+
+test_design_tree_init_creates_on_init() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc base ok=0
+    set +e
+    out=$("$WORKFLOW" init test-design-init --change-name test-design-init --capability test --goal "test" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "init exit" || ok=1
+    base="$tmp/.goal-spec/changes/test-design-init"
+    [[ -f "$base/design-tree.json" ]] || { printf "\n    ${RED}missing design-tree.json after init${NC}\n"; ok=1; }
+    local tree
+    tree=$(cat "$base/design-tree.json")
+    echo "$tree" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('schemaVersion')=='1.0', d; assert d.get('totalAsked')==0; assert d.get('totalAnswered')==0; assert d.get('activeQuestionId')==''; assert isinstance(d.get('nodes'),list) and len(d['nodes'])==0" 2>/dev/null || { printf "\n    ${RED}design-tree.json has invalid structure${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_add_and_answer() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc base ok=0
+    set +e
+    "$WORKFLOW" init test-dt-cycle --change-name test-dt-cycle --capability test --goal "test" --project-root "$tmp" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-dt-cycle"
+
+    # Add question
+    out=$("$WORKFLOW" design-tree-add-question test-dt-cycle --field selectedScope --question "Which scope?" --why-this-matters "Need scope to proceed" --recommended-answer "minimal" --options '[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]' --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "add question exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='question_added', d.get('result')" 2>/dev/null || { printf "\n    ${RED}add question result mismatch${NC}\n"; ok=1; }
+
+    local tree
+    tree=$(cat "$base/design-tree.json")
+    echo "$tree" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('totalAsked')==1; assert d.get('activeQuestionId')!=''; assert d['nodes'][0]['status']=='active'; assert d['nodes'][0]['field']=='selectedScope'" 2>/dev/null || { printf "\n    ${RED}design-tree after add question has wrong state${NC}\n"; ok=1; }
+
+    local ws
+    ws=$(cat "$base/workflow-state.json")
+    echo "$ws" | python3 -c "import json,sys; d=json.load(sys.stdin); agq=d.get('activeGrillQuestion',{}); assert agq.get('questionId')!=''; assert agq.get('status')=='active'" 2>/dev/null || { printf "\n    ${RED}workflow-state missing activeGrillQuestion${NC}\n"; ok=1; }
+
+    # Answer the question
+    local active_qid
+    active_qid=$(echo "$tree" | python3 -c "import json,sys; print(json.load(sys.stdin)['activeQuestionId'])")
+    out=$("$WORKFLOW" design-tree-answer-question test-dt-cycle --question-id "$active_qid" --field selectedScope --value minimal --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "answer question exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='answer_recorded', d.get('result')" 2>/dev/null || { printf "\n    ${RED}answer question result mismatch${NC}\n"; ok=1; }
+
+    tree=$(cat "$base/design-tree.json")
+    echo "$tree" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('totalAnswered')==1; assert d.get('activeQuestionId')==''; assert d['nodes'][0]['status']=='answered'; assert d['nodes'][0]['answer']['value']=='minimal'" 2>/dev/null || { printf "\n    ${RED}design-tree after answer has wrong state${NC}\n"; ok=1; }
+
+    ws=$(cat "$base/workflow-state.json")
+    echo "$ws" | python3 -c "import json,sys; d=json.load(sys.stdin); agq=d.get('activeGrillQuestion',{}); assert agq.get('questionId')=='', agq.get('questionId')" 2>/dev/null || { printf "\n    ${RED}workflow-state activeGrillQuestion not cleared${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_status_reports_correctly() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc base ok=0
+    set +e
+    "$WORKFLOW" init test-dt-status --change-name test-dt-status --capability test --goal "test" --project-root "$tmp" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-dt-status"
+
+    # No question yet status (should work even with design tree but no questions)
+    out=$("$WORKFLOW" design-tree-status test-dt-status --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "design-tree-status with empty tree exit" || ok=1
+
+    # Add question
+    "$WORKFLOW" design-tree-add-question test-dt-status --field selectedScope --question "Which scope?" --project-root "$tmp" > /dev/null 2>&1
+
+    out=$("$WORKFLOW" design-tree-status test-dt-status --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "design-tree-status with question exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='ok'; assert d.get('activeQuestion') is not None; assert d['designTree']['totalAsked']==1" 2>/dev/null || { printf "\n    ${RED}design-tree-status wrong state${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_get_active_returns_active() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    "$WORKFLOW" init test-dt-active --change-name test-dt-active --capability test --goal "test" --project-root "$tmp" > /dev/null 2>&1
+
+    "$WORKFLOW" design-tree-add-question test-dt-active --field selectedScope --question "Which scope?" --project-root "$tmp" > /dev/null 2>&1
+
+    out=$("$WORKFLOW" design-tree-get-active test-dt-active --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "get-active exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('activeQuestion') is not None; assert d['activeQuestion']['field']=='selectedScope'; assert d['activeQuestion']['status']=='active'" 2>/dev/null || { printf "\n    ${RED}get-active wrong state${NC}\n"; ok=1; }
+
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('source') in ('workflow-state','design-tree'), d.get('source')" 2>/dev/null || { printf "\n    ${RED}get-active missing source${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_scope_closure_auto_adds_question() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc base ok=0
+    set +e
+
+    "$WORKFLOW" init test-scope-dt --change-name test-scope-dt --capability test --goal "test" --project-root "$tmp" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-scope-dt"
+
+    python3 -c 'import json; json.dump({"schemaVersion":"1.0","changeName":"test-scope-dt","intendedOutcome":"improve dashboard","problemStatement":"Dashboard is slow","targetSurface":["dashboard"],"boundaryAssertions":{"noNoBuildRecommendation":False,"noValueJudgment":False}},open("'$base'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+
+    out=$("$WORKFLOW" scope-closure-gate test-scope-dt --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "scope-closure-gate exit" || ok=1
+
+    [[ -f "$base/design-tree.json" ]] || { printf "\n    ${RED}design-tree.json not created by scope-closure-gate${NC}\n"; ok=1; }
+    local tree
+    tree=$(cat "$base/design-tree.json")
+    echo "$tree" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('totalAsked')>=1, d; assert d.get('activeQuestionId')!=''; assert d['nodes'][0]['status']=='active'; assert d['nodes'][0]['field'] in ('intendedOutcome','problemStatement','targetSurface','selectedScope','includedChanges','excludedChanges','successSignal','boundaryAssertions'), d['nodes'][0]['field']" 2>/dev/null || { printf "\n    ${RED}scope-closure design-tree state wrong${NC}\n"; ok=1; }
+
+    [[ -f "$base/scope-closure-gate.json" ]] || { printf "\n    ${RED}scope-closure-gate.json not written${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_clarification_response_auto_answers() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc base ok=0
+    set +e
+
+    "$WORKFLOW" init test-clarify-dt --change-name test-clarify-dt --capability test --goal "test" --project-root "$tmp" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-clarify-dt"
+
+    python3 -c 'import json; json.dump({"schemaVersion":"1.0","changeName":"test-clarify-dt","intendedOutcome":"improve","problemStatement":"too slow","targetSurface":["dashboard"],"boundaryAssertions":{"noNoBuildRecommendation":False,"noValueJudgment":False}},open("'$base'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+
+    "$WORKFLOW" scope-closure-gate test-clarify-dt --project-root "$tmp" > /dev/null 2>&1
+
+    local active_qid
+    active_qid=$(python3 -c "import json; d=json.load(open('$base/design-tree.json')); print(d['activeQuestionId'])")
+    [[ -n "$active_qid" ]] || { printf "\n    ${RED}no active question in design tree${NC}\n"; ok=1; }
+
+    python3 -c 'import json; json.dump({"schemaVersion":"1.0","changeName":"test-clarify-dt","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Need scope","recommendedAnswer":"minimal","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}},open("'$base'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+
+    out=$("$WORKFLOW" problem-scope-clarification-response test-clarify-dt --project-root "$tmp" --answers '[{"field":"selectedScope","value":"minimal"}]' 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "clarification response exit" || ok=1
+
+    local tree
+    tree=$(cat "$base/design-tree.json")
+    echo "$tree" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('totalAnswered')>=1, d; assert d['activeQuestionId']==''; answered=[n for n in d['nodes'] if n.get('status')=='answered']; assert len(answered)>=1; assert answered[0]['answer']['value']=='minimal'" 2>/dev/null || { printf "\n    ${RED}design tree not answered by clarification response${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_history_is_durable() {
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc base ok=0
+    set +e
+
+    "$WORKFLOW" init test-dt-history --change-name test-dt-history --capability test --goal "test" --project-root "$tmp" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-dt-history"
+
+    # First question and answer
+    "$WORKFLOW" design-tree-add-question test-dt-history --field selectedScope --question "Which scope?" --why-this-matters "Need scope" --recommended-answer "minimal" --options '[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]' --project-root "$tmp" > /dev/null 2>&1
+    local qid1
+    qid1=$(python3 -c "import json; d=json.load(open('$base/design-tree.json')); print(d['activeQuestionId'])")
+    "$WORKFLOW" design-tree-answer-question test-dt-history --question-id "$qid1" --field selectedScope --value minimal --project-root "$tmp" > /dev/null 2>&1
+
+    # Second question and answer
+    "$WORKFLOW" design-tree-add-question test-dt-history --field successSignal --question "What success signal?" --why-this-matters "Need signal" --recommended-answer "tests pass" --options '[{"id":"tests","label":"All tests pass"},{"id":"demo","label":"Demo works"}]' --project-root "$tmp" > /dev/null 2>&1
+    local qid2
+    qid2=$(python3 -c "import json; d=json.load(open('$base/design-tree.json')); print(d['activeQuestionId'])")
+    "$WORKFLOW" design-tree-answer-question test-dt-history --question-id "$qid2" --field successSignal --value "tests pass" --project-root "$tmp" > /dev/null 2>&1
+
+    local tree
+    tree=$(cat "$base/design-tree.json")
+    echo "$tree" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('totalAsked')==2, d; assert d.get('totalAnswered')==2, d; assert d.get('activeQuestionId')==''; nodes=d['nodes']; assert len(nodes)==2; assert nodes[0]['status']=='answered'; assert nodes[1]['status']=='answered'; assert nodes[0]['answer']['value']=='minimal'; assert nodes[1]['answer']['value']=='tests pass'" 2>/dev/null || { printf "\n    ${RED}design-tree history wrong after 2 cycles${NC}\n"; ok=1; }
+
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_design_tree_schema_validates() {
+    python3 - <<PY
+import json
+schema = json.load(open('$PROJECT_DIR/schemas/design-tree.schema.json'))
+
+# Empty tree
+try:
+    import jsonschema
+except ImportError:
+    print("jsonschema not available; skipping")
+    exit(0)
+
+empty = {
+    'schemaVersion': '1.0',
+    'changeName': 'test',
+    'nodes': [],
+    'activeQuestionId': '',
+    'totalAsked': 0,
+    'totalAnswered': 0,
+    'updatedAt': '2026-07-01T12:00:00Z'
+}
+jsonschema.validate(empty, schema)
+
+# Active question node
+active = {
+    'schemaVersion': '1.0',
+    'changeName': 'test',
+    'nodes': [{
+        'questionId': 'q-001-x',
+        'field': 'x',
+        'question': 'Q?',
+        'whyThisMatters': 'Important',
+        'recommendedAnswer': 'A',
+        'options': [{'id': 'a', 'label': 'A'}],
+        'askedAt': '2026-07-01T12:00:00Z',
+        'answeredAt': None,
+        'answer': None,
+        'status': 'active'
+    }],
+    'activeQuestionId': 'q-001-x',
+    'totalAsked': 1,
+    'totalAnswered': 0,
+    'updatedAt': '2026-07-01T12:00:00Z'
+}
+jsonschema.validate(active, schema)
+
+# Answered question node
+answered = {
+    'schemaVersion': '1.0',
+    'changeName': 'test',
+    'nodes': [{
+        'questionId': 'q-001-x',
+        'field': 'x',
+        'question': 'Q?',
+        'askedAt': '2026-07-01T12:00:00Z',
+        'answeredAt': '2026-07-01T12:01:00Z',
+        'answer': {'field': 'x', 'value': 'A'},
+        'status': 'answered'
+    }],
+    'activeQuestionId': '',
+    'totalAsked': 1,
+    'totalAnswered': 1,
+    'updatedAt': '2026-07-01T12:01:00Z'
+}
+jsonschema.validate(answered, schema)
+print("All design tree schema validations pass")
+PY
+}
+
 # --- main ---
 
 echo ""
@@ -1933,6 +2316,10 @@ run_test "canonical write-spec rejects malformed spec-kernel" test_canonical_wri
 # ── Problem & Scope Confirmation Flow tests ──
 run_test "scope uncertainty blocks meaning analysis"     test_scope_uncertainty_blocks_meaning_analysis
 run_test "clarification request/response separation"     test_clarification_request_response_separation
+run_test "clarification request rejects multi-question"   test_clarification_request_rejects_multi_question
+run_test "clarification request requires whyThisMatters"  test_clarification_request_requires_why_this_matters
+run_test "clarification response rejects multi-answer"    test_clarification_response_rejects_multi_answer
+run_test "valid single question/response passes"          test_clarification_single_question_valid_pass
 run_test "scope closed no user confirm blocked"          test_scope_closed_no_user_confirm_blocked
 run_test "user confirm unlocks meaning analysis"         test_user_confirm_unlocks_meaning_analysis
 run_test "problem-scope user gate accepts aliases"       test_problem_scope_user_gate_accepts_aliases
@@ -1958,6 +2345,19 @@ run_test "scope-selected: requires confirm decisions" test_lint_response_scope_s
 run_test "scope-selected: clean confirmation passes" test_lint_response_scope_selected_clean_pass
 run_test "invalid-decision: requires rejection"     test_lint_response_invalid_decision_rejected
 run_test "digest-check: requires blocking language"  test_lint_response_missing_digest_blocked
+echo ""
+
+# Section: Design Tree
+# --- design-tree ---
+run_test "design tree commands exist"                      test_design_tree_commands_exist
+run_test "init creates design-tree.json"                   test_design_tree_init_creates_on_init
+run_test "add and answer question cycle"                   test_design_tree_add_and_answer
+run_test "design-tree-status reports correctly"            test_design_tree_status_reports_correctly
+run_test "design-tree-get-active returns active"           test_design_tree_get_active_returns_active
+run_test "scope-closure auto-adds question to design tree" test_design_tree_scope_closure_auto_adds_question
+run_test "clarification response auto-answers design tree" test_design_tree_clarification_response_auto_answers
+run_test "multiple iteration history is durable"            test_design_tree_history_is_durable
+run_test "design tree schema validates"                        test_design_tree_schema_validates
 echo ""
 
 # --- summary ---

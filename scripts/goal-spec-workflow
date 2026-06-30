@@ -55,6 +55,7 @@ EXTRACTED_CLAIMS_FILE = "extracted-claims.json"
 REFLECTION_REPORT_FILE = "reflection-report.json"
 RECOVERY_ACTIONS_FILE = "recovery-actions.json"
 CLAIM_GRAPH_FILE = "claim-graph.json"
+DESIGN_TREE_FILE = "design-tree.json"
 STATUS_FILE = "status.json"
 PRE_SPEC_GATE_FILE = "pre-spec-gate.json"
 WRITE_SPEC_STATUS_FILE = "write-spec-status.json"
@@ -750,6 +751,13 @@ def default_workflow_state(change_name: str | None, capability: str | None, goal
             "maxRepeatedQuestionCount": 2,
             "maxRepeatedChallengeCount": 2,
         },
+        "activeGrillQuestion": {
+            "questionId": "",
+            "field": "",
+            "question": "",
+            "status": "",
+            "askedAt": "",
+        },
         "createdAt": utc_now(),
         "updatedAt": utc_now(),
     }
@@ -763,6 +771,88 @@ def default_claim_graph(change_name: str | None) -> dict[str, Any]:
         "edges": [],
         "updatedAt": utc_now(),
     }
+
+
+def default_design_tree(change_name: str | None) -> dict[str, Any]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "changeName": change_name or "",
+        "nodes": [],
+        "activeQuestionId": "",
+        "totalAsked": 0,
+        "totalAnswered": 0,
+        "updatedAt": utc_now(),
+    }
+
+
+def design_tree_path(base: Path) -> Path:
+    return base / DESIGN_TREE_FILE
+
+
+def read_design_tree(base: Path) -> dict[str, Any]:
+    path = design_tree_path(base)
+    existing = read_json_optional(path)
+    if existing is not None:
+        return existing
+    return default_design_tree(None)
+
+
+def write_design_tree(base: Path, tree: dict[str, Any]) -> None:
+    tree["updatedAt"] = utc_now()
+    write_json(design_tree_path(base), tree)
+
+
+def next_question_id(tree: dict[str, Any]) -> str:
+    count = tree.get("totalAsked", 0) + 1
+    field = tree.get("nodes", [{}])[-1].get("field", "q") if tree.get("nodes") else "q"
+    return f"q-{count:03d}-{field}"
+
+
+def design_tree_add_question(tree: dict[str, Any], field: str, question: str, *, why_this_matters: str = "", recommended_answer: str = "", options: list | None = None) -> dict[str, Any]:
+    question_id = next_question_id(tree)
+    now = utc_now()
+    node: dict[str, Any] = {
+        "questionId": question_id,
+        "field": field,
+        "question": question,
+        "whyThisMatters": why_this_matters,
+        "recommendedAnswer": recommended_answer,
+        "options": options or [],
+        "askedAt": now,
+        "answeredAt": None,
+        "answer": None,
+        "status": "active",
+    }
+    # Mark any previously active questions as stale/historical
+    for existing in tree.get("nodes", []):
+        if existing.get("status") == "active" and existing.get("questionId") != question_id:
+            existing["status"] = "answered"
+            existing["answeredAt"] = now
+            existing["answer"] = {"field": existing.get("field", ""), "value": "[stale - superseded by next iteration]"}
+            tree["totalAnswered"] = tree.get("totalAnswered", 0) + 1
+    tree.setdefault("nodes", []).append(node)
+    tree["activeQuestionId"] = question_id
+    tree["totalAsked"] = tree.get("totalAsked", 0) + 1
+    tree["updatedAt"] = now
+    return tree
+
+
+def design_tree_answer_question(tree: dict[str, Any], question_id: str, field: str, value: str) -> dict[str, Any]:
+    now = utc_now()
+    found = False
+    for node in tree.get("nodes", []):
+        if node.get("questionId") == question_id and node.get("status") == "active":
+            node["status"] = "answered"
+            node["answeredAt"] = now
+            node["answer"] = {"field": field, "value": value}
+            found = True
+            break
+    if not found:
+        raise ValueError(f"active question not found: {question_id}")
+    tree["activeQuestionId"] = ""
+    tree["totalAnswered"] = tree.get("totalAnswered", 0) + 1
+    tree["updatedAt"] = now
+    return tree
 
 
 def read_json_optional(path: Path) -> dict[str, Any] | None:
@@ -989,6 +1079,12 @@ def ensure_structured_artifacts(base: Path, payload: dict[str, Any], *, force: b
         write_json(claim_graph_path, claim_graph)
     files["claimGraphFile"] = str(claim_graph_path)
 
+    design_tree = read_design_tree(base)
+    if force or not design_tree.get("changeName"):
+        design_tree = default_design_tree(change_name)
+        write_design_tree(base, design_tree)
+    files["designTreeFile"] = str(design_tree_path(base))
+
     extracted = extract_claims_from_gate(payload)
     extracted_path = base / EXTRACTED_CLAIMS_FILE
     write_json(extracted_path, extracted)
@@ -1011,6 +1107,7 @@ def ensure_structured_artifacts(base: Path, payload: dict[str, Any], *, force: b
         "reflectionReport": reflection,
         "recoveryActions": recovery,
         "claimGraph": claim_graph,
+        "designTree": design_tree,
     }
 
 
@@ -2750,11 +2847,80 @@ def cmd_scope_closure_gate(args):
     next_step = "problem_scope_clarification_request" if blocking else "problem_scope_user_confirmation_gate"
     gate = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"gate":"scope_closure","status":status_val,"closed":status_val=="closed","sourceFraming":PROBLEM_SCOPE_FRAMING_FILE,"inputDigests":{PROBLEM_SCOPE_FRAMING_FILE:_canonical_json_digest(framing)},"blockingFields":blocking,"nextStep":next_step,"allowedNextSteps":["problem_scope_clarification_request","problem_scope_user_confirmation_gate"],"reason":"Scope framing incomplete" if blocking else "All scope fields satisfied"}
     write_json(base / SCOPE_CLOSURE_GATE_FILE, gate)
+    # Auto-populate design tree when scope is not closed (grilling loop)
+    if blocking:
+        design_tree = read_design_tree(base)
+        if not design_tree.get("changeName"):
+            design_tree = default_design_tree(change_name)
+        first_blocking = blocking[0]
+        question_text = f"Please provide a clear {first_blocking} description to close scope."
+        design_tree = design_tree_add_question(
+            design_tree, first_blocking, question_text,
+            why_this_matters=f"Scope cannot be closed without a defined {first_blocking}.",
+            recommended_answer=f"A concise description of {first_blocking}",
+        )
+        write_design_tree(base, design_tree)
+        # Sync workflow-state activeGrillQuestion
+        workflow_path = base / WORKFLOW_STATE_FILE
+        workflow_state = read_json_optional(workflow_path)
+        if workflow_state:
+            active_node = next((n for n in design_tree.get("nodes", []) if n.get("questionId") == design_tree.get("activeQuestionId")), None)
+            if active_node:
+                workflow_state["activeGrillQuestion"] = {
+                    "questionId": active_node["questionId"],
+                    "field": active_node["field"],
+                    "question": active_node["question"],
+                    "status": active_node["status"],
+                    "askedAt": active_node["askedAt"],
+                }
+                workflow_state["updatedAt"] = utc_now()
+                write_json(workflow_path, workflow_state)
     code = EXIT_PASS if status_val == "closed" else EXIT_BLOCKED
-    dump(json_report("scope-closure-gate",status_val,"generated",code,gateFile=str(base/SCOPE_CLOSURE_GATE_FILE),nextStep=next_step))
+    dump(json_report("scope-closure-gate",status_val,"generated",code,gateFile=str(base/SCOPE_CLOSURE_GATE_FILE),nextStep=next_step,blockingFields=blocking))
     return code
 
-cmd_validate_problem_scope_clarification_request = lambda args: _validate_artifact_cmd(args, PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE, "validate-problem-scope-clarification-request", ("blockingFields","questionsForUser","boundaryAssertions"))
+def cmd_validate_problem_scope_clarification_request(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("validate-problem-scope-clarification-request","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    artifact_path = getattr(args,'artifact',None)
+    path = Path(artifact_path) if artifact_path else base / PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE
+    if not path.exists():
+        dump(json_report("validate-problem-scope-clarification-request","invalid_artifact","missing",EXIT_INVALID_ARTIFACT,errors=[f"{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE} not found at {path}"]))
+        return EXIT_INVALID_ARTIFACT
+    data = read_json(path)
+    errors = []
+    # Check required top-level fields
+    for field in ("blockingFields","questionsForUser","boundaryAssertions"):
+        val = data
+        for part in field.split("."):
+            val = val.get(part) if isinstance(val,dict) else None
+        if val is None or (isinstance(val,str) and not val.strip()):
+            errors.append(f"missing required field: {field}")
+    # Single-question enforcement: exactly one question
+    questions = data.get("questionsForUser",[])
+    if not isinstance(questions,list):
+        errors.append("questionsForUser must be an array")
+    elif len(questions) == 0:
+        errors.append("questionsForUser must contain at least one question")
+    elif len(questions) > 1:
+        errors.append(f"questionsForUser must contain exactly one question per iteration, got {len(questions)}")
+    else:
+        # Validate the single question's required sub-fields
+        q = questions[0]
+        for sub in ("field","question","whyThisMatters","recommendedAnswer"):
+            val = q.get(sub,"") if isinstance(q,dict) else None
+            if not val or (isinstance(val,str) and not val.strip()):
+                errors.append(f"questionsForUser[0].{sub} is required")
+    if errors:
+        dump(json_report("validate-problem-scope-clarification-request","invalid_artifact","validation_failed",EXIT_INVALID_ARTIFACT,errors=errors))
+        return EXIT_INVALID_ARTIFACT
+    digest = _canonical_json_digest(data)
+    dump(json_report("validate-problem-scope-clarification-request","pass","validated",EXIT_PASS,artifactFile=str(path),digest=digest,questionsCount=len(questions)))
+    return EXIT_PASS
 
 def cmd_problem_scope_clarification_response(args):
     root = project_root(args.project_root)
@@ -2773,9 +2939,51 @@ def cmd_problem_scope_clarification_response(args):
         dump(json_report("problem-scope-clarification-response","invalid_artifact","malformed",EXIT_INVALID_ARTIFACT,errors=[str(err)]))
         return EXIT_INVALID_ARTIFACT
     req = _load_artifact(base, PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE)
-    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"stage":"problem_scope_clarification_response","sourceRequest":PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE,"inputDigests":{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE:_canonical_json_digest(req)} if req else {},"answeredBy":{"type":"human","id":"user","source":"cli"},"answers":answers if isinstance(answers,list) else [answers],"readyForReframing":True,"nextStep":"problem_scope_framing"}
+    # Normalize answers to list
+    answers_list = answers if isinstance(answers,list) else [answers]
+    # Single-answer enforcement: exactly one answer
+    if len(answers_list) == 0:
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","missing_answers",EXIT_INVALID_ARTIFACT,errors=["answers must contain at least one answer — got empty array"]))
+        return EXIT_INVALID_ARTIFACT
+    if len(answers_list) > 1:
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","too_many_answers",EXIT_INVALID_ARTIFACT,errors=[f"answers must contain exactly one answer per iteration, got {len(answers_list)} — use exit 40"]))
+        return EXIT_INVALID_ARTIFACT
+    # Validate answer field matches request question field when request exists
+    if req:
+        req_questions = req.get("questionsForUser",[])
+        if req_questions and len(req_questions) > 0:
+            expected_field = req_questions[0].get("field","") if isinstance(req_questions[0],dict) else ""
+            if expected_field and isinstance(answers_list[0],dict) and answers_list[0].get("field","") != expected_field:
+                dump(json_report("problem-scope-clarification-response","invalid_artifact","field_mismatch",EXIT_INVALID_ARTIFACT,errors=[f"answer field '{answers_list[0].get('field','')}' does not match request question field '{expected_field}'"]))
+                return EXIT_INVALID_ARTIFACT
+    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"stage":"problem_scope_clarification_response","sourceRequest":PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE,"inputDigests":{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE:_canonical_json_digest(req)} if req else {},"answeredBy":{"type":"human","id":"user","source":"cli"},"answers":answers_list,"readyForReframing":True,"nextStep":"problem_scope_framing"}
     write_json(base / PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE, artifact)
-    dump(json_report("problem-scope-clarification-response","pass","captured",EXIT_PASS,artifactFile=str(base/PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE)))
+    # Auto-answer the active question in the design tree
+    design_tree = read_design_tree(base)
+    if design_tree.get("activeQuestionId"):
+        active_qid = design_tree["activeQuestionId"]
+        answer_field = answers_list[0].get("field", "") if isinstance(answers_list[0], dict) else ""
+        answer_value = answers_list[0].get("value", "") if isinstance(answers_list[0], dict) else str(answers_list[0])
+        if answer_value and active_qid:
+            try:
+                design_tree = design_tree_answer_question(design_tree, active_qid, answer_field, answer_value)
+                write_design_tree(base, design_tree)
+            except ValueError:
+                pass  # Non-blocking: design tree update is auxiliary
+        # Clear workflow-state activeGrillQuestion
+        workflow_path = base / WORKFLOW_STATE_FILE
+        workflow_state = read_json_optional(workflow_path)
+        if workflow_state:
+            workflow_state["activeGrillQuestion"] = {
+                "questionId": "",
+                "field": "",
+                "question": "",
+                "status": "",
+                "askedAt": "",
+            }
+            workflow_state["updatedAt"] = utc_now()
+            write_json(workflow_path, workflow_state)
+    dump(json_report("problem-scope-clarification-response","pass","captured",EXIT_PASS,artifactFile=str(base/PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE),designTreeTotalAsked=design_tree.get("totalAsked",0),designTreeTotalAnswered=design_tree.get("totalAnswered",0)))
     return EXIT_PASS
 
 def cmd_problem_scope_user_gate(args):
@@ -2797,6 +3005,211 @@ def cmd_problem_scope_user_gate(args):
     dump(json_report("problem-scope-user-gate",decision,"terminal" if decision=="abandon_proposal" else "confirmed",EXIT_PASS,gateFile=str(base/PROBLEM_SCOPE_USER_GATE_FILE)))
     return EXIT_PASS
 
+
+def cmd_design_tree_add_question(args: argparse.Namespace) -> int:
+    """Add a question to the design tree (durable grilling loop state)."""
+    root = project_root(args.project_root)
+    try:
+        change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("design-tree-add-question", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)]))
+        return EXIT_USAGE
+    if not change_name:
+        dump(json_report("design-tree-add-question", "invalid_artifact", "missing_change_name", EXIT_USAGE, errors=["change-name required"]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args, 'artifact_dir', None), change_name)
+    # Ensure design tree exists
+    design_tree = read_design_tree(base)
+    if not design_tree.get("changeName"):
+        design_tree = default_design_tree(change_name)
+
+    field = getattr(args, 'field', '') or ''
+    question_text = getattr(args, 'question_text', '') or ''
+    why_this_matters = getattr(args, 'why_this_matters', '') or ''
+    recommended_answer = getattr(args, 'recommended_answer', '') or ''
+    raw_options = getattr(args, 'options', '') or ''
+
+    if not field or not question_text:
+        dump(json_report("design-tree-add-question", "invalid_artifact", "missing_fields", EXIT_USAGE, errors=["--field and --question required"]))
+        return EXIT_USAGE
+
+    options = []
+    if raw_options:
+        try:
+            parsed = json.loads(raw_options)
+            options = parsed if isinstance(parsed, list) else [parsed]
+        except json.JSONDecodeError as e:
+            dump(json_report("design-tree-add-question", "invalid_artifact", "invalid_options_json", EXIT_USAGE, errors=[f"--options must be JSON array: {e}"]))
+            return EXIT_USAGE
+
+    design_tree = design_tree_add_question(
+        design_tree, field, question_text,
+        why_this_matters=why_this_matters,
+        recommended_answer=recommended_answer,
+        options=options,
+    )
+    write_design_tree(base, design_tree)
+
+    # Also update workflow-state activeGrillQuestion
+    workflow_path = base / WORKFLOW_STATE_FILE
+    workflow_state = read_json_optional(workflow_path)
+    if workflow_state:
+        active_node = next((n for n in design_tree.get("nodes", []) if n.get("questionId") == design_tree.get("activeQuestionId")), None)
+        if active_node:
+            workflow_state["activeGrillQuestion"] = {
+                "questionId": active_node["questionId"],
+                "field": active_node["field"],
+                "question": active_node["question"],
+                "status": active_node["status"],
+                "askedAt": active_node["askedAt"],
+            }
+            workflow_state["updatedAt"] = utc_now()
+            write_json(workflow_path, workflow_state)
+
+    dump(json_report(
+        "design-tree-add-question", "pass", "question_added", EXIT_PASS,
+        questionId=design_tree["activeQuestionId"],
+        totalAsked=design_tree["totalAsked"],
+        totalAnswered=design_tree["totalAnswered"],
+    ))
+    return EXIT_PASS
+
+
+def cmd_design_tree_answer_question(args: argparse.Namespace) -> int:
+    """Record an answer in the design tree."""
+    root = project_root(args.project_root)
+    try:
+        change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("design-tree-answer-question", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)]))
+        return EXIT_USAGE
+    if not change_name:
+        dump(json_report("design-tree-answer-question", "invalid_artifact", "missing_change_name", EXIT_USAGE, errors=["change-name required"]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args, 'artifact_dir', None), change_name)
+    design_tree = read_design_tree(base)
+    if not design_tree.get("nodes"):
+        dump(json_report("design-tree-answer-question", "blocked", "empty_design_tree", EXIT_BLOCKED, errors=["No questions in design tree"]))
+        return EXIT_BLOCKED
+
+    question_id = getattr(args, 'question_id', '') or ''
+    field = getattr(args, 'field', '') or ''
+    value = getattr(args, 'value', '') or ''
+
+    if not value:
+        dump(json_report("design-tree-answer-question", "invalid_artifact", "missing_value", EXIT_USAGE, errors=["--value required"]))
+        return EXIT_USAGE
+
+    if not question_id:
+        # Auto-detect from active question
+        active_id = design_tree.get("activeQuestionId", "")
+        if not active_id:
+            dump(json_report("design-tree-answer-question", "blocked", "no_active_question", EXIT_BLOCKED, errors=["No active question — use --question-id to specify"]))
+            return EXIT_BLOCKED
+        question_id = active_id
+
+    try:
+        design_tree = design_tree_answer_question(design_tree, question_id, field, value)
+    except ValueError as e:
+        dump(json_report("design-tree-answer-question", "blocked", "question_not_found", EXIT_BLOCKED, errors=[str(e)]))
+        return EXIT_BLOCKED
+
+    write_design_tree(base, design_tree)
+
+    # Update workflow-state activeGrillQuestion to clear active
+    workflow_path = base / WORKFLOW_STATE_FILE
+    workflow_state = read_json_optional(workflow_path)
+    if workflow_state:
+        workflow_state["activeGrillQuestion"] = {
+            "questionId": "",
+            "field": "",
+            "question": "",
+            "status": "",
+            "askedAt": "",
+        }
+        workflow_state["updatedAt"] = utc_now()
+        write_json(workflow_path, workflow_state)
+
+    dump(json_report(
+        "design-tree-answer-question", "pass", "answer_recorded", EXIT_PASS,
+        questionId=question_id,
+        totalAsked=design_tree["totalAsked"],
+        totalAnswered=design_tree["totalAnswered"],
+    ))
+    return EXIT_PASS
+
+
+def cmd_design_tree_status(args: argparse.Namespace) -> int:
+    """Report design tree current state."""
+    root = project_root(args.project_root)
+    try:
+        change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("design-tree-status", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args, 'artifact_dir', None), change_name)
+    design_tree = read_design_tree(base)
+    if not design_tree.get("changeName"):
+        dump(json_report("design-tree-status", "blocked", "not_initialized", EXIT_BLOCKED, errors=["Design tree not initialized; run init first"]))
+        return EXIT_BLOCKED
+
+    active_node = None
+    if design_tree.get("activeQuestionId"):
+        active_node = next((n for n in design_tree.get("nodes", []) if n.get("questionId") == design_tree["activeQuestionId"]), None)
+
+    history = [n for n in design_tree.get("nodes", []) if n.get("status") == "answered"]
+
+    dump(json_report(
+        "design-tree-status", "pass", "ok", EXIT_PASS,
+        designTree=design_tree,
+        activeQuestion=active_node,
+        historyCount=len(history),
+    ))
+    return EXIT_PASS
+
+
+def cmd_design_tree_get_active(args: argparse.Namespace) -> int:
+    """Get the active grill question."""
+    root = project_root(args.project_root)
+    try:
+        change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("design-tree-get-active", "invalid_artifact", "usage_error", EXIT_USAGE, errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args, 'artifact_dir', None), change_name)
+
+    # First check workflow state for activeGrillQuestion
+    workflow_path = base / WORKFLOW_STATE_FILE
+    workflow_state = read_json_optional(workflow_path)
+    if workflow_state and workflow_state.get("activeGrillQuestion", {}).get("questionId"):
+        active = workflow_state["activeGrillQuestion"]
+        dump(json_report(
+            "design-tree-get-active", "pass", "ok", EXIT_PASS,
+            activeQuestion=active,
+            source="workflow-state",
+        ))
+        return EXIT_PASS
+
+    # Fall back to design tree active question
+    design_tree = read_design_tree(base)
+    if design_tree.get("activeQuestionId"):
+        active_node = next((n for n in design_tree.get("nodes", []) if n.get("questionId") == design_tree["activeQuestionId"]), None)
+        if active_node:
+            dump(json_report(
+                "design-tree-get-active", "pass", "ok", EXIT_PASS,
+                activeQuestion={
+                    "questionId": active_node["questionId"],
+                    "field": active_node["field"],
+                    "question": active_node["question"],
+                    "status": active_node["status"],
+                    "askedAt": active_node["askedAt"],
+                },
+                source="design-tree",
+            ))
+            return EXIT_PASS
+
+    dump(json_report("design-tree-get-active", "pass", "no_active_question", EXIT_PASS, activeQuestion=None))
+    return EXIT_PASS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2960,6 +3373,35 @@ def build_parser() -> argparse.ArgumentParser:
     cares.add_argument("--gate", required=True, dest="gate_name", help="gate name: problem-scope-user-gate or openspec-authoring-approval-gate")
     cares.add_argument("--result", required=True, help="ChoiceActionSelectionResult JSON string")
     cares.set_defaults(func=cmd_choice_action_result)
+
+    # ── Design Tree (durable grilling loop state) commands ──
+    dta = subparsers.add_parser("design-tree-add-question", parents=[common], help="add a question to the durable design tree and set as active grill question")
+    dta.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    dta.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    dta.add_argument("--field", required=True, help="blocking field this question addresses")
+    dta.add_argument("--question", required=True, dest="question_text", help="the bounded question text")
+    dta.add_argument("--why-this-matters", default="", help="why this question is blocking")
+    dta.add_argument("--recommended-answer", default="", help="recommended/default answer")
+    dta.add_argument("--options", default="", help="JSON array of answer options")
+    dta.set_defaults(func=cmd_design_tree_add_question)
+
+    dtans = subparsers.add_parser("design-tree-answer-question", parents=[common], help="record an answer in the design tree for the active or specified question")
+    dtans.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    dtans.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    dtans.add_argument("--question-id", default="", help="question id (auto-detects active question if omitted)")
+    dtans.add_argument("--field", default="", help="field being answered")
+    dtans.add_argument("--value", required=True, help="answer value")
+    dtans.set_defaults(func=cmd_design_tree_answer_question)
+
+    dts = subparsers.add_parser("design-tree-status", parents=[common], help="report design tree current state (active question, history, totals)")
+    dts.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    dts.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    dts.set_defaults(func=cmd_design_tree_status)
+
+    dtga = subparsers.add_parser("design-tree-get-active", parents=[common], help="get the current active grill question")
+    dtga.add_argument("change_name_arg", nargs="?", help="kebab-case change name")
+    dtga.add_argument("--change-name", help="kebab-case OpenSpec change name metadata")
+    dtga.set_defaults(func=cmd_design_tree_get_active)
 
     init = subparsers.add_parser("init", parents=[common], help="create .goal-spec artifacts")
     init.add_argument("change_name_arg", nargs="?", help="kebab-case OpenSpec change name; stores artifacts under .goal-spec/changes/<change-name>/")
