@@ -1423,6 +1423,107 @@ test_clarification_request_response_separation() {
     rm -rf "$tmp"
     return $ok
 }
+
+test_clarification_request_rejects_multi_question() {
+    # >1 question in questionsForUser must be rejected with exit 40
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-multi-q --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-multi-q"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-multi-q","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-multi-q --project-root "$tmp" > /dev/null 2>&1
+    # Request with TWO questions instead of exactly one
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-multi-q","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope","successSignal"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Cannot proceed without scope","recommendedAnswer":"minimal","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]},{"field":"successSignal","question":"What success signal?","whyThisMatters":"Cannot close scope without success signal","recommendedAnswer":"tests pass","options":[{"id":"tests","label":"All tests pass"},{"id":"demo","label":"Demo works"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-multi-q --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 40 "$rc" "multi-question request must exit 40" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert any('exactly one' in e.lower() for e in d.get('errors',[]))" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}error does not mention exactly-one requirement${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_clarification_request_requires_why_this_matters() {
+    # Single question without whyThisMatters/recommendedAnswer must fail exit 40
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-missing-detail --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-missing-detail"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-missing-detail","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-missing-detail --project-root "$tmp" > /dev/null 2>&1
+    # Request with single question but missing whyThisMatters and recommendedAnswer
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-missing-detail","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-missing-detail --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 40 "$rc" "missing whyThisMatters must exit 40" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); errors=d.get('errors',[]); assert any('whyThisMatters' in e for e in errors) or any('recommendedAnswer' in e for e in errors)" > /dev/null 2>&1 \
+        || { printf "\n    ${RED}error does not mention missing whyThisMatters/recommendedAnswer${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_clarification_response_rejects_multi_answer() {
+    # >1 answer in response must be rejected with exit 40
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-multi-a --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-multi-a"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-multi-a","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-multi-a --project-root "$tmp" > /dev/null 2>&1
+    # Create request with single question
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-multi-a","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Need scope to proceed","recommendedAnswer":"minimal","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    # Response with TWO answers
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" problem-scope-clarification-response test-multi-a --project-root "$tmp" --answers '[{"field":"selectedScope","value":"full"},{"field":"successSignal","value":"pass"}]' 2>&1)
+    rc=$?
+    set -e
+    assert_exit 40 "$rc" "multi-answer response must exit 40" || ok=1
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_clarification_single_question_valid_pass() {
+    # Proper single question with all required fields must pass
+    local tmp base
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    "$WORKFLOW" intake test-valid-single --project-root "$tmp" --proposal "Test" > /dev/null 2>&1
+    base="$tmp/.goal-spec/changes/test-valid-single"
+    mkdir -p "$base"
+    python3 -c 'import json; framing={"schemaVersion":"1.0","changeName":"test-valid-single","stage":"problem_scope_framing","role":"judge","modelClass":"value-judge","mode":"framing_only","intendedOutcome":"x","problemStatement":"x","targetSurface":["a"],"scopeCandidates":[],"selectedScope":"","includedChanges":[],"excludedChanges":[],"successSignal":"","blockingQuestions":[{"field":"selectedScope","question":"Which?","options":["minimal","full"]}],"boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(framing,open("'"$base"'/problem-scope-framing.json","w"))' > /dev/null 2>&1
+    "$WORKFLOW" scope-closure-gate test-valid-single --project-root "$tmp" > /dev/null 2>&1
+    # Valid single question with whyThisMatters and recommendedAnswer
+    python3 -c 'import json; req={"schemaVersion":"1.0","changeName":"test-valid-single","stage":"problem_scope_clarification_request","role":"judge","modelClass":"value-judge","mode":"framing_only","blockingFields":["selectedScope"],"questionsForUser":[{"field":"selectedScope","question":"Which scope?","whyThisMatters":"Cannot proceed without a clear scope selection","recommendedAnswer":"minimal — smallest valuable change","options":[{"id":"minimal","label":"Minimal"},{"id":"full","label":"Full"}]}],"nextStep":"problem_scope_clarification_response","boundaryAssertions":{"noValueJudgment":True,"noNoBuildRecommendation":True,"noOpenSpecWriting":True,"noRuntimePlanning":True,"noConcreteModelId":True}}; json.dump(req,open("'"$base"'/problem-scope-clarification-request.json","w"))' > /dev/null 2>&1
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" validate-problem-scope-clarification-request test-valid-single --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "valid single-question request must exit 0" || ok=1
+    # Also verify the response for a single answer passes
+    set +e
+    out=$("$WORKFLOW" problem-scope-clarification-response test-valid-single --project-root "$tmp" --answers '[{"field":"selectedScope","value":"full"}]' 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "valid single-answer response must exit 0" || ok=1
+    [[ -f "$base/problem-scope-clarification-response.json" ]] || { printf "\n    ${RED}missing clarification response${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_scope_closed_no_user_confirm_blocked() {
     # Scope closed but no user gate → proposal-meaning-analysis blocked
     local tmp
@@ -1933,6 +2034,10 @@ run_test "canonical write-spec rejects malformed spec-kernel" test_canonical_wri
 # ── Problem & Scope Confirmation Flow tests ──
 run_test "scope uncertainty blocks meaning analysis"     test_scope_uncertainty_blocks_meaning_analysis
 run_test "clarification request/response separation"     test_clarification_request_response_separation
+run_test "clarification request rejects multi-question"   test_clarification_request_rejects_multi_question
+run_test "clarification request requires whyThisMatters"  test_clarification_request_requires_why_this_matters
+run_test "clarification response rejects multi-answer"    test_clarification_response_rejects_multi_answer
+run_test "valid single question/response passes"          test_clarification_single_question_valid_pass
 run_test "scope closed no user confirm blocked"          test_scope_closed_no_user_confirm_blocked
 run_test "user confirm unlocks meaning analysis"         test_user_confirm_unlocks_meaning_analysis
 run_test "problem-scope user gate accepts aliases"       test_problem_scope_user_gate_accepts_aliases

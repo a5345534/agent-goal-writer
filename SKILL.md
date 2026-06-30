@@ -308,6 +308,77 @@ Use the same skill for these OpenSpec planning/writing modes:
 - Do not place module-specific domain entities or responsibilities into shared
   modules unless the current authoritative specs allow it.
 
+## Problem & Scope Grilling Contract
+
+Goals, constraints, and validation rules for the Problem & Scope clarification
+loop (Stage 1.5 framing → Stage 1.6 scope closure gate → Stage 1.6-1
+clarification request → Stage 1.6-2 clarification response → loop to 1.5).
+
+### Single-Question Enforcement
+
+The Problem & Scope clarification loop produces **exactly one** bounded
+clarification question per iteration. This is a hard contract:
+
+- **Clarification request** (`problem-scope-clarification-request.json`):
+  `questionsForUser` MUST contain exactly one element. A request with zero
+  or two or more questions is invalid and MUST be rejected.
+- **Clarification response** (`problem-scope-clarification-response.json`):
+  `answers` MUST contain exactly one element (matching the request's single
+  question). A response with zero or two or more answers is invalid and MUST
+  be rejected.
+- Deterministic validation of both artifacts uses exit code 40
+  (`EXIT_INVALID_ARTIFACT`) for violations.
+- This contract replaces earlier guidance allowing 1–2 questions. Every
+  iteration resolves exactly one blocking field.
+
+### Why Exactly One Question Per Iteration
+
+- A single question focuses the decision maker on the highest-impact unresolved
+  blocking field, reducing cognitive load and avoiding split attention.
+- Multiple questions in one request invite the decision maker to answer some
+  but not others, or to give partial answers that leave the scope
+  incompletely resolved.
+- The loop can iterate: if one question is answered and scope is still not
+  closed, the next iteration asks the next highest-priority question.
+- One question per iteration maps cleanly to a single `blockingFields` entry,
+  keeping the `scope-closure-gate.json` transition traceable.
+
+### Required Question Fields
+
+Every element in `questionsForUser` MUST include:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `field` | string | The blocking field this question addresses |
+| `question` | string | The bounded question text |
+| `whyThisMatters` | string | Explanation of why this question is blocking and what resolving it enables |
+| `recommendedAnswer` | string | The recommended or expected answer, with rationale |
+| `options` | array | Bounded answer options (at least two) when the question admits discrete choices |
+
+`whyThisMatters` ensures the decision maker understands the impact of their
+answer. `recommendedAnswer` gives the decision maker a concrete default to
+accept or override, reducing vague responses. `options` MUST be provided when
+the question has discrete bounded alternatives; free-text questions SHOULD
+still name expected answer shape.
+
+### Validation Enforcement
+
+The `validate-problem-scope-clarification-request` command checks:
+
+1. `questionsForUser` exists and is a non-empty array.
+2. `questionsForUser` has exactly one element — zero or ≥2 produces `exit 40`.
+3. Each question has non-empty `field`, `question`, `whyThisMatters`, and
+   `recommendedAnswer`.
+4. Each question provides `options` (array of at least 2) when possible.
+   A question without `options` passes validation but SHOULD have them.
+
+The `problem-scope-clarification-response` command checks:
+
+1. `answers` has exactly one element — zero or ≥2 produces `exit 40`.
+2. The answer's `field` matches the request's single question `field`.
+
+These checks are deterministic script-level validations, not semantic reviews.
+
 ## Workflow — Spec Ideation Authoring Flow
 
 The goal-spec workflow follows canonical stages 0–11. Each stage produces a
@@ -348,8 +419,10 @@ Neutral scope candidates (not recommendations):
 A. <scope label> — included changes / excluded changes / success signal / trade-off (descriptive only)
 B. <scope label> — included changes / excluded changes / success signal / trade-off (descriptive only)
 
-Blocking clarification (max 1–2):
+Blocking clarification (exactly one):
 1. <bounded question mapped to blocking field>
+   Why this matters: <why this is blocking and what resolving it enables>
+   Recommended answer: <recommended/expected answer, with rationale>
    Options: A / B / C
 
 Not doing yet:
@@ -436,9 +509,11 @@ Output: `scope-closure-gate.json`.
 
 ### 1.6-1 Problem Scope Clarification Request
 
-The **judge** produces bounded questions (max 1–2) when scope is not closed.
-Output: `problem-scope-clarification-request.json`. Every question maps to a
-blocking field and provides bounded options.
+The **judge** produces a single bounded question (exactly one) when scope is
+not closed. Output: `problem-scope-clarification-request.json`. Every question
+maps to a blocking field, provides bounded options when possible, and includes
+`whyThisMatters` plus `recommendedAnswer` per the
+[Problem & Scope Grilling Contract](#problem--scope-grilling-contract).
 
 ### 1.6-2 Problem Scope Clarification Response
 

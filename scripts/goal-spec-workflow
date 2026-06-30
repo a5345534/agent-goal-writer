@@ -2754,7 +2754,48 @@ def cmd_scope_closure_gate(args):
     dump(json_report("scope-closure-gate",status_val,"generated",code,gateFile=str(base/SCOPE_CLOSURE_GATE_FILE),nextStep=next_step))
     return code
 
-cmd_validate_problem_scope_clarification_request = lambda args: _validate_artifact_cmd(args, PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE, "validate-problem-scope-clarification-request", ("blockingFields","questionsForUser","boundaryAssertions"))
+def cmd_validate_problem_scope_clarification_request(args):
+    root = project_root(args.project_root)
+    try: change_name = requested_change_name(args)
+    except ValueError as err:
+        dump(json_report("validate-problem-scope-clarification-request","invalid_artifact","usage_error",EXIT_USAGE,errors=[str(err)]))
+        return EXIT_USAGE
+    base = _artifact_dir(root, getattr(args,'artifact_dir',None), change_name)
+    artifact_path = getattr(args,'artifact',None)
+    path = Path(artifact_path) if artifact_path else base / PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE
+    if not path.exists():
+        dump(json_report("validate-problem-scope-clarification-request","invalid_artifact","missing",EXIT_INVALID_ARTIFACT,errors=[f"{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE} not found at {path}"]))
+        return EXIT_INVALID_ARTIFACT
+    data = read_json(path)
+    errors = []
+    # Check required top-level fields
+    for field in ("blockingFields","questionsForUser","boundaryAssertions"):
+        val = data
+        for part in field.split("."):
+            val = val.get(part) if isinstance(val,dict) else None
+        if val is None or (isinstance(val,str) and not val.strip()):
+            errors.append(f"missing required field: {field}")
+    # Single-question enforcement: exactly one question
+    questions = data.get("questionsForUser",[])
+    if not isinstance(questions,list):
+        errors.append("questionsForUser must be an array")
+    elif len(questions) == 0:
+        errors.append("questionsForUser must contain at least one question")
+    elif len(questions) > 1:
+        errors.append(f"questionsForUser must contain exactly one question per iteration, got {len(questions)}")
+    else:
+        # Validate the single question's required sub-fields
+        q = questions[0]
+        for sub in ("field","question","whyThisMatters","recommendedAnswer"):
+            val = q.get(sub,"") if isinstance(q,dict) else None
+            if not val or (isinstance(val,str) and not val.strip()):
+                errors.append(f"questionsForUser[0].{sub} is required")
+    if errors:
+        dump(json_report("validate-problem-scope-clarification-request","invalid_artifact","validation_failed",EXIT_INVALID_ARTIFACT,errors=errors))
+        return EXIT_INVALID_ARTIFACT
+    digest = _canonical_json_digest(data)
+    dump(json_report("validate-problem-scope-clarification-request","pass","validated",EXIT_PASS,artifactFile=str(path),digest=digest,questionsCount=len(questions)))
+    return EXIT_PASS
 
 def cmd_problem_scope_clarification_response(args):
     root = project_root(args.project_root)
@@ -2773,7 +2814,24 @@ def cmd_problem_scope_clarification_response(args):
         dump(json_report("problem-scope-clarification-response","invalid_artifact","malformed",EXIT_INVALID_ARTIFACT,errors=[str(err)]))
         return EXIT_INVALID_ARTIFACT
     req = _load_artifact(base, PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE)
-    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"stage":"problem_scope_clarification_response","sourceRequest":PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE,"inputDigests":{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE:_canonical_json_digest(req)} if req else {},"answeredBy":{"type":"human","id":"user","source":"cli"},"answers":answers if isinstance(answers,list) else [answers],"readyForReframing":True,"nextStep":"problem_scope_framing"}
+    # Normalize answers to list
+    answers_list = answers if isinstance(answers,list) else [answers]
+    # Single-answer enforcement: exactly one answer
+    if len(answers_list) == 0:
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","missing_answers",EXIT_INVALID_ARTIFACT,errors=["answers must contain at least one answer — got empty array"]))
+        return EXIT_INVALID_ARTIFACT
+    if len(answers_list) > 1:
+        dump(json_report("problem-scope-clarification-response","invalid_artifact","too_many_answers",EXIT_INVALID_ARTIFACT,errors=[f"answers must contain exactly one answer per iteration, got {len(answers_list)} — use exit 40"]))
+        return EXIT_INVALID_ARTIFACT
+    # Validate answer field matches request question field when request exists
+    if req:
+        req_questions = req.get("questionsForUser",[])
+        if req_questions and len(req_questions) > 0:
+            expected_field = req_questions[0].get("field","") if isinstance(req_questions[0],dict) else ""
+            if expected_field and isinstance(answers_list[0],dict) and answers_list[0].get("field","") != expected_field:
+                dump(json_report("problem-scope-clarification-response","invalid_artifact","field_mismatch",EXIT_INVALID_ARTIFACT,errors=[f"answer field '{answers_list[0].get('field','')}' does not match request question field '{expected_field}'"]))
+                return EXIT_INVALID_ARTIFACT
+    artifact = {"schemaVersion":SCHEMA_VERSION,"changeName":change_name,"stage":"problem_scope_clarification_response","sourceRequest":PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE,"inputDigests":{PROBLEM_SCOPE_CLARIFICATION_REQUEST_FILE:_canonical_json_digest(req)} if req else {},"answeredBy":{"type":"human","id":"user","source":"cli"},"answers":answers_list,"readyForReframing":True,"nextStep":"problem_scope_framing"}
     write_json(base / PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE, artifact)
     dump(json_report("problem-scope-clarification-response","pass","captured",EXIT_PASS,artifactFile=str(base/PROBLEM_SCOPE_CLARIFICATION_RESPONSE_FILE)))
     return EXIT_PASS
