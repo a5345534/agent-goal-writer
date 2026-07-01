@@ -72,6 +72,43 @@ RECOVERY_ACTIONS = (
 WORKFLOW_SCHEMA_VERSION = "1.1"
 CLAIM_GRAPH_SCHEMA_VERSION = "1.0"
 CHANGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+QUESTION_MARK_RE = re.compile(r"[?？]")
+NOT_DOING_YET_RE = re.compile(
+    r"(?i)(not doing yet)|"
+    r"(暫不處理|暫不進行|暫不執行|暫時不做|尚不進行|目前不做|現在不做|先不做|還不做|不會先做|未處理事項)"
+)
+CHINESE_NEGATIVE_RE = re.compile(r"^\s*(?:[-*+]\s+)?(?:不|不要|不會|不能|未|無|沒有|暫不|尚不|先不)")
+ENGLISH_TEMPLATE_LABELS_FOR_CJK = (
+    (r"(?im)^\s*Problem & Scope Grilling\s*$", "Problem & Scope Grilling"),
+    (r"(?im)^\s*-\s*Intended outcome\s*:", "Intended outcome"),
+    (r"(?im)^\s*-\s*Improvement intent\s*:", "Improvement intent"),
+    (r"(?im)^\s*-\s*Scope uncertainty\s*:", "Scope uncertainty"),
+    (r"(?im)^\s*-\s*Current baseline / source context\s*:", "Current baseline / source context"),
+    (r"(?im)^\s*Design tree status\s*$", "Design tree status"),
+    (r"(?im)^\s*-\s*Resolved branches\s*:", "Resolved branches"),
+    (r"(?im)^\s*-\s*Open blocking branch\s*:", "Open blocking branch"),
+    (r"(?im)^\s*Blocking clarification(?:\s*\([^)]*\))?\s*$", "Blocking clarification"),
+    (r"(?im)^\s*-\s*Question\s*:", "Question"),
+    (r"(?im)^\s*-\s*Why this matters\s*:", "Why this matters"),
+    (r"(?im)^\s*-\s*My recommended answer\s*:", "My recommended answer"),
+    (r"(?im)^\s*-\s*Options\s*:", "Options"),
+    (r"(?im)^\s*Options\s*:", "Options"),
+    (r"(?im)^\s*Not doing yet\s*:", "Not doing yet"),
+)
+
+
+def has_cjk(text: str) -> bool:
+    return bool(CJK_RE.search(text))
+
+
+def has_not_doing_yet_section(text: str) -> bool:
+    return bool(NOT_DOING_YET_RE.search(text))
+
+
+def is_negative_reference_line(line: str) -> bool:
+    stripped = line.strip().lower()
+    return bool(re.search(r"(?i)^\s*(?:[-*+]\s+)?(?:no|not|without)\b", stripped)) or bool(CHINESE_NEGATIVE_RE.search(line))
 
 # ── Canonical Spec Ideation Authoring Flow constants ──
 
@@ -2673,8 +2710,8 @@ def cmd_lint_response(args):
     # ── pre-confirmation checks ──
     if stage == "pre-confirmation":
         detected_stage = "pre-confirmation"
-        # Check for "Not doing yet" section first — if present, treat as framing discipline
-        has_not_doing_yet = bool(re.search(r'(?i)not doing yet', response))
+        # Check for a localized "Not doing yet" section first — if present, treat as framing discipline
+        has_not_doing_yet = has_not_doing_yet_section(response)
 
         # Always check for overt recommendations (even in clean responses)
         overt_recommendation_patterns = [
@@ -2752,29 +2789,35 @@ def cmd_lint_response(args):
     # ── grilling (value challenge / constructive disagreement) checks ──
     elif stage == "grilling":
         detected_stage = "grilling"
-        has_not_doing_yet = bool(re.search(r'(?i)not doing yet', response))
+        has_not_doing_yet = has_not_doing_yet_section(response)
+
+        if has_cjk(response):
+            for pat, label in ENGLISH_TEMPLATE_LABELS_FOR_CJK:
+                if re.search(pat, response):
+                    forbidden.append(f"mixed-language template label: {label}")
+
+        internal_reasoning_patterns = [
+            (r'(?im)^\s*Refining project communication\s*$', 'internal reasoning heading: Refining project communication'),
+            (r'(?im)^\s*Structuring the final response\s*$', 'internal reasoning heading: Structuring the final response'),
+            (r'(?i)\bI[’\']?m considering\b', 'internal reasoning: I am considering'),
+            (r'(?i)\bI need to finalize\b', 'internal reasoning: I need to finalize'),
+            (r'(?i)\bI wonder if\b', 'internal reasoning: I wonder if'),
+            (r'(?i)\bI think I should\b', 'internal reasoning: I think I should'),
+            (r'(?i)\bI[’\']ll want to\b', 'internal reasoning: I will want to'),
+        ]
+        for pat, label in internal_reasoning_patterns:
+            if re.search(pat, response):
+                forbidden.append(label)
 
         # 1. Exactly one Question
-        # Count distinct interrogative sentences (lines with question marks)
-        # Exclude section headers like "Blocking clarification:" — they introduce but aren't the question
-        # Find all lines that contain a question mark
-        question_lines = re.findall(r'(?im)^\s*[^\n]*\?[^\n]*$', response)
-        # Also count inline questions within a sentence that aren't at end-of-line
-        inline_questions = re.findall(r'(?i)[?]', response)
-        if len(inline_questions) > 0 and len(question_lines) == 0:
-            # Question mark found but not at end of a line (inline within paragraph)
-            num_inline = len(inline_questions)
-            if num_inline == 1:
-                total_questions = 1
-            else:
-                total_questions = num_inline
-        else:
-            total_questions = len(question_lines)
+        # Count explicit question marks, including CJK full-width question marks.
+        # Agents must write the active grill question as an explicit question.
+        total_questions = len(QUESTION_MARK_RE.findall(response))
 
         if total_questions == 0:
-            missing_required.append("question (no question found — grilling response must include exactly one question")
+            missing_required.append("question (no question found — grilling response must include exactly one question)")
         elif total_questions > 1:
-            forbidden.append(f"multiple questions ({total_questions} found — grilling response must include exactly one question")
+            forbidden.append(f"multiple questions ({total_questions} found — grilling response must include exactly one question)")
 
         # 2. My recommended answer or localized equivalent
         recommended_patterns = [
@@ -2785,6 +2828,13 @@ def cmd_lint_response(args):
             r'(?i)recommended answer',
             r'(?i)suggested approach',
             r'(?i)my suggestion',
+            r'我的建議答案',
+            r'建議答案',
+            r'我建議',
+            r'我的建議',
+            r'建議做法',
+            r'建議回覆',
+            r'建議先',
         ]
         found_recommended = any(re.search(p, response) for p in recommended_patterns)
         if not found_recommended:
@@ -2792,25 +2842,27 @@ def cmd_lint_response(args):
 
         # 3. Bounded options
         bounded_option_patterns = [
-            # Options: A / B style
-            r'(?i)\boptions?:?\s+A\s*/\s*B',
-            r'(?i)\boptions?:?\s+A[.)]',
-            r'(?i)\boptions?:?\s+\d[.)]',
+            # Options: A / B style, including localized labels and full-width slash.
+            r'(?i)\boptions?:?\s+A\s*[/／]\s*B',
+            r'(?:選項|可選答案|有界選項|選擇)\s*[:：]?\s*A\s*[/／]\s*B',
+            r'(?i)\boptions?:?\s+A[.)．、]',
+            r'(?:選項|可選答案|有界選項|選擇)\s*[:：]?\s*A[.)．、]',
+            r'(?i)\boptions?:?\s+\d[.)．、]',
             # A. ... B. ... style
-            r'(?im)^\s*(?:A[.)]|B[.)]|1[.)]|2[.)])\s+.*(?:\n\s*(?:A[.)]|B[.)]|1[.)]|2[.)])\s+.*)*',
+            r'(?im)^\s*(?:A[.)．、]|B[.)．、]|1[.)．、]|2[.)．、])\s+.*(?:\n\s*(?:A[.)．、]|B[.)．、]|1[.)．、]|2[.)．、])\s+.*)*',
         ]
-        found_options = any(re.search(p, response) for p in bounded_option_patterns)
+        option_line_count = len(re.findall(r'(?im)^\s*(?:[A-ZＡ-Ｚ][.)．、]|[0-9０-９]+[.)．、])\s+\S+', response))
+        found_options = option_line_count >= 2 or any(re.search(p, response) for p in bounded_option_patterns)
         if not found_options:
-            missing_required.append("bounded options (e.g., 'Options: A / B' or 'A. ... B. ...')")
+            missing_required.append("bounded options (e.g., localized '選項：A / B' or 'A. ... B. ...')")
 
         # 4. Not doing yet section
-        has_not_doing_yet = bool(re.search(r'(?i)not doing yet', response))
         if not has_not_doing_yet:
-            missing_required.append("Not doing yet section")
+            missing_required.append("Not doing yet section or localized equivalent")
 
         # 5. No premature content: PMA, Spec Kernel, OpenSpec writing
         # Allow these terms only when on a line that is a negative reference
-        # (e.g., "- no PMA", "no Spec Kernel writing", "not doing yet" section)
+        # (e.g., "- no PMA", "不進行 Spec Kernel writing", "not doing yet" section)
         lines = response.split('\n')
         premature_terms = [
             (r'(?i)\bproposal meaning analysis\b', 'Proposal Meaning Analysis'),
@@ -2821,10 +2873,9 @@ def cmd_lint_response(args):
         for pat, label in premature_terms:
             for line in lines:
                 if re.search(pat, line):
-                    stripped = line.strip().lower()
-                    # Check if this line is a negative reference (starts with - no, no, not, or part of not doing yet section)
-                    is_negative_line = bool(re.search(r'(?i)^\s*(?:[-*+]\s+)?(?:no|not|without)\b', stripped))
-                    if not is_negative_line:
+                    # Check if this line is a negative reference (starts with - no, no, not,
+                    # without, or localized equivalents such as 不/暫不/尚不).
+                    if not is_negative_reference_line(line):
                         forbidden.append(f"premature content: {label}")
                         # Only flag once per label
                         break

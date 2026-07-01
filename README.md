@@ -128,18 +128,19 @@ openspec/changes/<change-name>/
 
 `goal-spec` includes a `lint-response` command that validates natural-language
 agent responses against stage-specific routing rules. It ensures agents follow
-the one-question discipline, bounded options format, and content boundaries
-required at each stage.
+the one-question discipline, bounded options format, same-language visible
+labels, internal-reasoning boundaries, and content boundaries required at each
+stage.
 
 Available stages:
 
 | Stage | When to use | What it enforces |
 |-------|------------|------------------|
-| `pre-confirmation` | Stage 1.5 Problem & Scope Grilling Output | Exactly one blocking question, recommended answer, bounded options, `Not doing yet`, no premature PMA/Spec Kernel/OpenSpec writing |
+| `pre-confirmation` | Stage 1.5 Problem & Scope Grilling Output | Exactly one blocking question, recommended answer, bounded options, localized `Not doing yet`, no premature PMA/Spec Kernel/OpenSpec writing |
 | `scope-selected` | Stage 1.7 Scope Confirmation | Three valid decisions, numbered choices, rejects Stage 5 tokens |
 | `invalid-decision` | Invalid Stage 5 approval at 1.7 | Rejection language + valid 1.7 choices |
 | `digest-check` | Missing input digests | Blocking/failing language on freshness |
-| `grilling` | Problem-scope grilling or value challenge phase | Exactly one question, recommended answer, bounded options, `Not doing yet`, no premature content |
+| `grilling` | Problem-scope grilling or value challenge phase | Exactly one question including CJK `？`, recommended answer, bounded options, localized `Not doing yet`, same-language visible labels, no internal reasoning, no premature content |
 
 Example — lint a grilling-phase response:
 
@@ -160,6 +161,11 @@ Not doing yet:
 - no Spec Kernel or OpenSpec writing
 " --project-root ./
 ```
+
+For non-English user-facing responses, localize headings/field labels (for
+example, use `期望成果` rather than `Intended outcome` in Traditional Chinese) while
+preserving canonical SSOT identifiers such as file names, function names, schema
+fields, paths, commands, and decision tokens.
 
 The linter returns exit 0 (pass) or exit 20 (blocked) with a JSON report.
 

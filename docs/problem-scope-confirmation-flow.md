@@ -33,10 +33,16 @@ Allowed:
   design-tree branch.
 - Include why the question matters, the agent's recommended answer, and bounded
   options when possible.
+- Use the user's natural language/script for visible prose and labels; preserve
+  only canonical SSOT identifiers such as file names, paths, schema fields,
+  commands, function names, and decision tokens.
 - Use existing functionality as baseline context and scope boundary evidence.
 
 Forbidden:
 - Ask multiple unrelated questions in one response.
+- Copy English template labels into non-English responses (for example,
+  `Intended outcome` in a Traditional Chinese response).
+- Expose internal reasoning, scratchpad, or response-planning notes.
 - Label any whole scope candidate as "best", "highest value", "no-build", or
   "smaller-scope recommendation".
 - Rank or score scope candidates by value or complexity.
@@ -64,10 +70,10 @@ or write OpenSpec during this stage. If the user expresses improvement intent
 unsure about scope, `scopeUncertainty` must be true.
 
 **Response template**: The Stage 1.5 Problem & Scope Grilling Output Template
-(see SKILL.md) MUST be used — include intended outcome, improvement intent,
-scope uncertainty, design tree status, exactly one blocking question, why it
-matters, the agent's recommended answer, bounded options, and "Not doing yet"
-section.
+(see SKILL.md) MUST be used with localized visible labels — include intended
+outcome, improvement intent, scope uncertainty, design tree status, exactly one
+blocking question, why it matters, the agent's recommended answer, bounded
+options, and a localized "Not doing yet" section.
 
 ### 1.6 Scope Closure Gate
 
@@ -112,17 +118,23 @@ critical collaborator / value challenge phase. Responses during this phase
 MUST follow the one-question discipline enforced by the `grilling` lint stage:
 
 - **Exactly one question** — a single focused question that resolves the
-  highest-impact blocker. Multiple questions are rejected by the linter.
+  highest-impact blocker. ASCII `?` and CJK `？` are both accepted; multiple
+  questions are rejected by the linter.
 - **My recommended answer or localized equivalent** — the agent provides a
   concrete recommendation or suggested approach.
 - **Bounded options** — the question presents the user with specific, limited
   choices (e.g., "A / B" or numbered options).
-- **Not doing yet section** — explicitly lists what is NOT being addressed
-  in this response (no PMA, no Spec Kernel, no OpenSpec writing).
+- **Not doing yet section or localized equivalent** — explicitly lists what is
+  NOT being addressed in this response (no PMA, no Spec Kernel, no OpenSpec
+  writing).
+- **Same-language visible labels** — non-English responses must localize
+  template labels while preserving canonical SSOT identifiers.
+- **No internal reasoning leakage** — scratchpad/planning text and meta headings
+  must not be user-visible.
 - **No premature content** — the response must not contain Proposal Meaning
   Analysis, Spec Kernel, OpenSpec writing, or OpenSpec scaffolding as
-  substantive content. These terms are allowed only in the "Not doing yet"
-  section as negative references.
+  substantive content. These terms are allowed only in negative "not doing yet"
+  lines.
 
 Use the `lint-response` command with `--stage grilling` to validate responses:
 

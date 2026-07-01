@@ -155,7 +155,10 @@ truth:
 Tone and language rules:
 
 - Be direct, respectful, and evidence-grounded.
-- Reply in the same natural language/script the user is using unless the user explicitly asks otherwise; keep canonical artifact tokens in their required machine-readable form.
+- Reply in the same natural language/script the user is using unless the user explicitly asks otherwise.
+- Localize user-visible headings and field labels (for example, do not copy English labels such as "Intended outcome" into a Traditional Chinese response).
+- Keep canonical SSOT identifiers in their required machine-readable form, including file names, paths, function names, schema fields, stage/decision tokens such as `confirm_scope_for_analysis`, package names, command names, and code symbols.
+- Never expose internal chain-of-thought, scratchpad, response-planning notes, or meta headings such as "Refining project communication" / "Structuring the final response".
 - Do not shame the request or the user.
 - Do not pretend uncertainty is certainty.
 - Do not bury disagreement in hedging when the value/risk issue is material.
@@ -262,9 +265,10 @@ Response lint — validate agent responses against stage-specific routing rules:
 <skill-dir>/scripts/goal-spec-workflow lint-response --stage grilling --response-file <response-file> --project-root <project-root>
 ```
 
-The `grilling` stage enforces exactly one question, a recommended answer,
-bounded options, a `Not doing yet` section, and no premature Proposal Meaning
-Analysis / Spec Kernel / OpenSpec writing content.
+The `grilling` stage enforces exactly one question (including localized CJK
+question marks), a recommended answer, bounded options, a localized `Not doing
+yet` section, same-language visible labels, no internal reasoning leakage, and
+no premature Proposal Meaning Analysis / Spec Kernel / OpenSpec writing content.
 
 ```
 
@@ -359,44 +363,50 @@ Rules:
 3. The question must include why it matters.
 4. The question must include the agent's recommended answer.
 5. The question must provide bounded options when possible.
-6. The agent must wait for the user's answer before asking another question.
-7. The agent must not perform Proposal Meaning Analysis, Value Challenge, Spec Kernel, or OpenSpec writing until scope is closed and user confirms.
-8. If the answer can be found by reading authoritative project sources, inspect those sources first instead of asking the user.
+6. User-visible prose and labels must use the user's language/script; preserve only canonical SSOT identifiers exactly.
+7. Do not mention later-stage terms outside negative "not doing yet" lines; explain blockers in ordinary localized language.
+8. Never expose internal reasoning or response-planning notes.
+9. The agent must wait for the user's answer before asking another question.
+10. The agent must not perform Proposal Meaning Analysis, Value Challenge, Spec Kernel, or OpenSpec writing until scope is closed and user confirms.
+11. If the answer can be found by reading authoritative project sources, inspect those sources first instead of asking the user.
 
 ### Stage 1.5 Problem & Scope Grilling Output Template
 
 When scope is uncertain and the user has NOT given `confirm_scope_for_analysis`,
-MUST use this structure and MUST NOT include value judgment, no-build or
-smaller-scope recommendations, Proposal Meaning Analysis, Spec Kernel, or
+MUST use this semantic structure and MUST NOT include value judgment, no-build
+or smaller-scope recommendations, Proposal Meaning Analysis, Spec Kernel, or
 OpenSpec writing. A recommended answer is REQUIRED for the single blocking
 question; it is not a value/no-build recommendation.
 
+The labels below are not fixed English strings. Localize them to the user's
+language/script. For Traditional Chinese, use a shape like:
+
 ```text
-Problem & Scope Grilling
-- Intended outcome: <current understanding>
-- Improvement intent: <true/false>
-- Scope uncertainty: <true/false>
-- Current baseline / source context: <summary>
+問題與範圍追問
+- 期望成果：<目前理解>
+- 改善意圖：<true/false>
+- 範圍不確定：<true/false>
+- 目前基準／來源脈絡：<摘要>
 
-Design tree status
-- Resolved branches: <list>
-- Open blocking branch: <single branch id + label>
+設計樹狀態
+- 已解決分支：<清單>
+- 開放阻塞分支：<single branch id + label>
 
-Blocking clarification (exactly 1)
-- Question: <exactly one question>
-- Why this matters: <one sentence>
-- My recommended answer: <concrete recommendation>
-- Options:
-  A. <option>
-  B. <option>
-  C. <option>
+阻塞釐清（只能 1 題）
+- 問題：<剛好一個問題，使用使用者語言的問號>
+- 為什麼重要：<一句話；不要提及後續階段名稱>
+- 我的建議答案：<具體建議答案>
+- 選項：
+  A. <選項>
+  B. <選項>
+  C. <選項>
 
-Not doing yet:
-- no value judgment
-- no no-build recommendation
-- no smaller-scope recommendation
-- no Proposal Meaning Analysis
-- no Spec Kernel or OpenSpec writing
+暫不處理：
+- 不做價值判斷
+- 不提出 no-build recommendation
+- 不提出 smaller-scope recommendation
+- 不進行 Proposal Meaning Analysis
+- 不撰寫 Spec Kernel 或 OpenSpec writing
 ```
 
 ### Stage 1.7 Scope-Confirmation Response Template

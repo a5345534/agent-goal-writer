@@ -2077,6 +2077,107 @@ Not doing yet:
     return $ok
 }
 
+test_lint_response_grilling_cjk_localized_pass() {
+    # Traditional Chinese grilling response with localized labels and CJK question mark must pass.
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage grilling --response-text "問題與範圍追問
+
+- 期望成果：建立新的 OpenSpec change，但尚未知道實際產品或技術變更。
+- 改善意圖：true
+- 範圍不確定：true
+- 目前基準／來源脈絡：目前工作目錄是 /tmp/example；尚未收到變更目標。
+
+設計樹狀態
+- 已解決分支：使用 goal-spec skill。
+- 開放阻塞分支：raw-proposal — 原始變更目標。
+
+阻塞釐清（只能 1 題）
+- 問題：這個新 OpenSpec change 想要達成的原始目標是什麼？
+- 為什麼重要：沒有原始目標就無法建立問題與範圍框架。
+- 我的建議答案：請用 2–5 句描述目前問題、想改善的結果、已知受影響 repo/module。
+- 選項：
+  A. 新功能或能力：描述使用者或系統需要能做什麼
+  B. Bugfix 或行為修正：描述現在錯在哪、期望行為是什麼
+  C. 架構或治理決策：描述要標準化或改變的邊界或流程
+
+暫不處理：
+- 不進行 Proposal Meaning Analysis
+- 不撰寫 Spec Kernel 或 OpenSpec writing
+- 不做價值判斷" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 0 "$rc" "lint grilling cjk localized pass exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('result')=='pass', d" 2>/dev/null || { printf "\n    ${RED}localized CJK grilling response must pass${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_grilling_blocks_internal_reasoning() {
+    # User-visible internal reasoning must fail even if the final structure is otherwise valid.
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage grilling --response-text "Refining project communication
+
+I’m considering how to handle the request.
+
+I have reviewed your proposal. My recommended answer is A.
+
+Blocking clarification:
+What is the raw change goal?
+
+Options:
+A. Feature
+B. Bugfix
+
+Not doing yet:
+- no Proposal Meaning Analysis
+- no Spec Kernel or OpenSpec writing" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint grilling internal reasoning exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'internal reasoning' in str(d.get('forbidden',[])), d" 2>/dev/null || { printf "\n    ${RED}must flag internal reasoning leakage${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
+test_lint_response_grilling_blocks_mixed_language_labels_for_cjk() {
+    # CJK user-facing responses must not copy English template labels unless they are SSOT identifiers.
+    local tmp
+    tmp=$(mktemp -d)
+    git -C "$tmp" init -q
+    local out rc ok=0
+    set +e
+    out=$("$WORKFLOW" lint-response --stage grilling --response-text "Problem & Scope Grilling
+
+- Intended outcome: 建立新的 OpenSpec change。
+- Improvement intent: true
+- Scope uncertainty: true
+
+Blocking clarification (exactly 1)
+- Question: 這個 change 的目標是什麼？
+- My recommended answer: 請先描述問題和期望結果。
+- Options:
+  A. 新功能
+  B. Bugfix
+
+Not doing yet:
+- no Proposal Meaning Analysis
+- no Spec Kernel or OpenSpec writing" --project-root "$tmp" 2>&1)
+    rc=$?
+    set -e
+    assert_exit 20 "$rc" "lint grilling mixed-language labels exit" || ok=1
+    echo "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'mixed-language template label' in str(d.get('forbidden',[])), d" 2>/dev/null || { printf "\n    ${RED}must flag mixed-language template labels${NC}\n"; ok=1; }
+    rm -rf "$tmp"
+    return $ok
+}
+
 test_authoring_profile_abstract_model_classes() {
     python3 - <<PY
 import json
@@ -2545,6 +2646,9 @@ run_test "grilling: requires bounded options"         test_lint_response_grillin
 run_test "grilling: requires Not doing yet"           test_lint_response_grilling_requires_not_doing_yet
 run_test "grilling: blocks premature Spec Kernel"     test_lint_response_grilling_blocks_premature_spec_kernel
 run_test "grilling: clean pass"                       test_lint_response_grilling_clean_pass
+run_test "grilling: CJK localized pass"               test_lint_response_grilling_cjk_localized_pass
+run_test "grilling: blocks internal reasoning"        test_lint_response_grilling_blocks_internal_reasoning
+run_test "grilling: blocks mixed-language labels"     test_lint_response_grilling_blocks_mixed_language_labels_for_cjk
 echo ""
 
 # Section: Design Tree

@@ -69,24 +69,27 @@ runtime model binding, concrete model IDs). Allowed references are abstract
 
 The `scripts/goal-spec-workflow lint-response` command validates natural-language agent
 responses against stage-specific routing rules. This prevents premature content (e.g.,
-Spec Kernel before scope confirmation) and enforces structured output discipline.
+Spec Kernel before scope confirmation), internal reasoning leakage, mixed-language
+template labels, and enforces structured output discipline.
 
 Available stages:
 
 | Stage | Context | Enforces |
 |-------|---------|----------|
-| `pre-confirmation` | Stage 1.5 Problem & Scope Grilling Output | Exactly one blocking question, recommended answer, bounded options, `Not doing yet`, no PMA/Spec Kernel/OpenSpec writing |
+| `pre-confirmation` | Stage 1.5 Problem & Scope Grilling Output | Exactly one blocking question, recommended answer, bounded options, localized `Not doing yet`, no PMA/Spec Kernel/OpenSpec writing |
 | `scope-selected` | Stage 1.7 Scope Confirmation Response | Three valid decisions, numbered choices, rejects Stage 5 tokens |
 | `invalid-decision` | Invalid Stage 5 approval at Stage 1.7 | Rejection language + valid 1.7 choices |
 | `digest-check` | Missing input digests | Blocking/failing language on freshness check |
-| `grilling` | Critical collaborator / value challenge phase | Exactly one question, recommended answer, bounded options, `Not doing yet`, no premature PMA/Spec Kernel/OpenSpec |
+| `grilling` | Critical collaborator / value challenge phase | Exactly one question including CJK `？`, recommended answer, bounded options, localized `Not doing yet`, same-language labels, no internal reasoning, no premature PMA/Spec Kernel/OpenSpec |
 
 The `grilling` stage is used whenever the agent is in single-question grilling
 mode, including uncertain-scope clarification before Stage 1.7 and constructive
 disagreement/value challenge after scope confirmation. It ensures the response
 contains exactly one focused question, a recommended answer (or localized
-equivalent), bounded options for the user to choose from, a `Not doing yet`
-section, and no premature content from later analysis stages.
+equivalent), bounded options for the user to choose from, a localized `Not doing
+yet` section, same-language visible labels (while preserving SSOT identifiers),
+no internal reasoning leakage, and no premature content from later analysis
+stages.
 
 Usage:
 
