@@ -10,7 +10,7 @@ closure, approval, and OpenSpec writing.
 |-------|------|------|-------------------|
 | 0 | Proposal Intake | deterministic | — |
 | 1 | Project Modeling | role | collector / evidence-collector |
-| 1.5 | Problem & Scope Framing | role | judge / value-judge (framing-only) |
+| 1.5 | Problem & Scope Grilling | role | judge / value-judge (grilling mode) |
 | 1.6 | Scope Closure Gate | gate | deterministic script |
 | 1.6-1 | Problem Scope Clarification Request | role | judge / value-judge |
 | 1.6-2 | Problem Scope Clarification Response | deterministic | — |
@@ -75,17 +75,18 @@ Available stages:
 
 | Stage | Context | Enforces |
 |-------|---------|----------|
-| `pre-confirmation` | Stage 1.5 Framing-Only Output | No recommendations, `Not doing yet` section, no PMA/Spec Kernel/OpenSpec writing |
+| `pre-confirmation` | Stage 1.5 Problem & Scope Grilling Output | Exactly one blocking question, recommended answer, bounded options, `Not doing yet`, no PMA/Spec Kernel/OpenSpec writing |
 | `scope-selected` | Stage 1.7 Scope Confirmation Response | Three valid decisions, numbered choices, rejects Stage 5 tokens |
 | `invalid-decision` | Invalid Stage 5 approval at Stage 1.7 | Rejection language + valid 1.7 choices |
 | `digest-check` | Missing input digests | Blocking/failing language on freshness check |
 | `grilling` | Critical collaborator / value challenge phase | Exactly one question, recommended answer, bounded options, `Not doing yet`, no premature PMA/Spec Kernel/OpenSpec |
 
-The `grilling` stage is used after scope confirmation (`confirm_scope_for_analysis`)
-when the agent is in constructive disagreement or value challenge mode. It ensures
-the response contains exactly one focused question, a recommended answer (or localized
-equivalent), bounded options for the user to choose from, a `Not doing yet` section,
-and no premature content from later analysis stages.
+The `grilling` stage is used whenever the agent is in single-question grilling
+mode, including uncertain-scope clarification before Stage 1.7 and constructive
+disagreement/value challenge after scope confirmation. It ensures the response
+contains exactly one focused question, a recommended answer (or localized
+equivalent), bounded options for the user to choose from, a `Not doing yet`
+section, and no premature content from later analysis stages.
 
 Usage:
 

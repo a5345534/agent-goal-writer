@@ -11,39 +11,38 @@ content, the agent MUST apply this routing contract:
 
 | Condition | Allowed response |
 | --- | --- |
-| Scope uncertain or `scopeUncertainty=true` | Stage 1.5 Problem & Scope Framing only; if not closed, Stage 1.6-1 bounded clarification request. |
+| Scope uncertain or `scopeUncertainty=true` | Stage 1.5 Problem & Scope Grilling only; if not closed, Stage 1.6-1 single bounded clarification request. |
 | User selected a scope but did not provide `confirm_scope_for_analysis` | Summarize selected scope and request exactly `confirm_scope_for_analysis`, `revise_scope`, or `abandon_proposal`. |
 | User provides `confirm_scope_for_analysis` | Stage 2 Proposal Meaning Analysis may proceed, subject to artifact/input availability. |
-| User provides `revise_scope` | Return to Stage 1.5 framing. |
+| User provides `revise_scope` | Return to Stage 1.5 grilling. |
 | User provides `abandon_proposal` | Terminate the proposal; do NOT label it no-build. |
 | User provides Stage 5 approval (e.g., `approve_openspec_authoring`) before Stage 5 | Reject as INVALID for Stage 1.7 and show the three valid Stage 1.7 decisions. |
-| User chooses `continue_discussion` while scope is uncertain | Return to Stage 1.5 framing/clarification, NOT Value & Logic Closure Assessment. |
+| User chooses `continue_discussion` while scope is uncertain | Return to Stage 1.5 grilling/clarification, NOT Value & Logic Closure Assessment. |
 | Required `inputDigests` are missing | Block freshness; do NOT accept the artifact. |
 
-## Scope Candidates vs Recommendations
+## Problem & Scope Grilling Rules
 
-Before `confirm_scope_for_analysis`, scope candidates are neutral — they help
-the user decide scope. Recommendations evaluate value and therefore belong
-after scope confirmation.
+Before `confirm_scope_for_analysis`, the agent operates in grilling mode.
+Exactly one active blocking question may be asked at a time. Recommendations are
+allowed only as the agent's suggested answer to that blocking question; value
+judgment, no-build, and smaller-scope recommendations still belong after scope
+confirmation.
 
-Allowed (neutral):
-- List scope candidates with included/excluded changes, success signal, and
-  descriptive trade-off.
+Allowed:
+- Ask exactly one blocking question that maps to one blocking field and one
+  design-tree branch.
+- Include why the question matters, the agent's recommended answer, and bounded
+  options when possible.
 - Use existing functionality as baseline context and scope boundary evidence.
 
 Forbidden:
-- Label any candidate as "recommended", "best", "highest value", "no-build",
-  or "smaller-scope recommendation".
-- Rank or score candidates by value or complexity.
+- Ask multiple unrelated questions in one response.
+- Label any whole scope candidate as "best", "highest value", "no-build", or
+  "smaller-scope recommendation".
+- Rank or score scope candidates by value or complexity.
 - Use existing functionality to cancel `improvementIntent` or justify no-build.
-
-## Bounded Clarification Rules
-
-When scope is not closed:
-- Maximum 1–2 questions per round.
-- Every question must map to a blocking field.
-- Every question must provide bounded options or concrete answer directions.
-- No broad "please provide more detail" without options.
+- Proceed to PMA, Spec Kernel, or OpenSpec writing before scope closure and user
+  confirmation.
 
 ## Persisted-State Honesty
 
@@ -53,20 +52,22 @@ When scope is not closed:
 
 ## Stages
 
-### 1.5 Problem & Scope Framing
+### 1.5 Problem & Scope Grilling
 
-The **judge** (`value-judge`) operates in **framing-only mode** to clarify the
+The **judge** (`value-judge`) operates in **grilling mode** to clarify the
 user's problem, intended scope, and improvement intent. Output:
-`problem-scope-framing.json`.
+`problem-scope-framing.json` plus durable design-tree state.
 
 The judge MUST NOT recommend no-build, evaluate value, classify as duplicate,
 or write OpenSpec during this stage. If the user expresses improvement intent
 ("make it more complete"), `improvementIntent` must be true. If the user is
 unsure about scope, `scopeUncertainty` must be true.
 
-**Response template**: The Stage 1.5 Framing-Only Output Template (see SKILL.md)
-MUST be used — include intended outcome, improvement intent, scope uncertainty,
-neutral scope candidates, bounded clarification, and "Not doing yet" section.
+**Response template**: The Stage 1.5 Problem & Scope Grilling Output Template
+(see SKILL.md) MUST be used — include intended outcome, improvement intent,
+scope uncertainty, design tree status, exactly one blocking question, why it
+matters, the agent's recommended answer, bounded options, and "Not doing yet"
+section.
 
 ### 1.6 Scope Closure Gate
 
@@ -79,15 +80,16 @@ OpenSpec should be written.
 
 ### 1.6-1 Problem Scope Clarification Request
 
-The **judge** produces bounded questions (max 1–2) when scope is not closed.
-Output: `problem-scope-clarification-request.json`. Every question must map
-to a blocking field and provide bounded options.
+The **judge** produces a single bounded question when scope is not closed.
+Output: `problem-scope-clarification-request.json`. The question must map to one
+blocking field and one design-tree branch, provide bounded options when possible,
+and include the agent's recommended answer.
 
 ### 1.6-2 Problem Scope Clarification Response
 
 A **deterministic step** capturing the decision maker's answers.
 Output: `problem-scope-clarification-response.json`. After response,
-workflow loops back to Stage 1.5 for reframing with clarified scope.
+workflow loops back to Stage 1.5 for grilling/reframing with clarified scope.
 
 ### 1.7 Problem-Scope User Confirmation Gate
 
